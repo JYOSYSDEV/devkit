@@ -1,0 +1,12 @@
+{
+  "name": "devkit-marketplace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/runtime/*.test.mjs tests/standard/*.test.mjs",
+    "validate": "claude plugin validate . --strict"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}

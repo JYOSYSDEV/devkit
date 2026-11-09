@@ -1,0 +1,14 @@
+{
+  "project": "__PROJECT_TITLE__",
+  "owners": {
+    "business": [{ "name": "", "email": "" }],
+    "technical": [{ "name": "", "email": "" }]
+  },
+  "tier": "lite",
+  "users": "社内の1部署・数十人",
+  "personalData": { "stored": false, "items": [] },
+  "auth": "dev",
+  "externalHosts": [],
+  "released": false,
+  "releasedMigration": ""
+}

@@ -1,0 +1,20 @@
+# 開発用 PostgreSQL 17。`pnpm db:setup` で起動とマイグレーションを行う。
+# 自動テストと E2E はメモリ上の PGlite（同じ PostgreSQL 17 系）を使うので、テストだけなら Docker は不要。
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  db-data:

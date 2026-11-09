@@ -1,0 +1,27 @@
+# Docker のビルドコンテキストに入れないもの。
+# node_modules は手元の OS 用のバイナリを含むので、イメージの中で pnpm install したものを上書きしないように除く。
+node_modules
+**/node_modules
+.pnpm-store
+.next
+.next-e2e
+out
+coverage
+playwright-report
+test-results
+test-reports
+*.tsbuildinfo
+next-env.d.ts
+
+# シークレット（.env.example は残す）
+.env
+.env.*
+!.env.example
+
+# git と Claude Code・devkit の作業用ファイル（並列ワーカーの worktree は丸ごとのチェックアウトを含む）
+.git
+.claude/worktrees
+.claude/settings.local.json
+.devkit/tmp
+.data
+.DS_Store

@@ -1,0 +1,27 @@
+# 改行は LF にそろえる（Windows で編集しても、差分・Biome・Docker の中のスクリプトがずれないように）
+* text=auto eol=lf
+
+# バイナリ（改行の変換や差分の対象にしない）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.avif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tgz binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.mp4 binary
+*.webm binary
+*.mp3 binary
+*.wasm binary
+*.xlsx binary
+*.docx binary
+*.pptx binary

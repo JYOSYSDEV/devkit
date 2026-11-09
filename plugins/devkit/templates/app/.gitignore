@@ -1,0 +1,37 @@
+node_modules/
+# pnpm のストア（プロジェクトと HOME が別のディスクのとき、pnpm がプロジェクトの直下に作ることがある）
+.pnpm-store/
+.next/
+# E2E 用のビルド（playwright.config.ts が DEVKIT_E2E_AUTH=1 で作る）
+.next-e2e/
+out/
+next-env.d.ts
+*.tsbuildinfo
+coverage/
+playwright-report/
+test-results/
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Claude Code: 個人設定とワーカー用 worktree は共有しない
+# （.devkit/state.json・controls.json・journal.jsonl はコミットする。別の環境で開いても、状態と承認と人のコマンドの記録が分かるように）
+.claude/settings.local.json
+.claude/worktrees/
+.devkit/tmp/
+
+# 開発用 PGlite のデータ
+.data/
+
+# devkit ランナー（状態の要約は .devkit/progress.md と .devkit/reports/ に残る）
+.devkit/worktrees/
+.devkit/run.json
+.devkit/run.lock
+.devkit/logs/
+.devkit/cache/
+.devkit/gates/
+.devkit/status.html
+.devkit/controls.json.lock
+.devkit/**/*.tmp-*
+test-reports/

@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(pnpm install --frozen-lockfile*)",
+      "Bash(pnpm verify*)",
+      "Bash(pnpm lint*)",
+      "Bash(pnpm format*)",
+      "Bash(pnpm typecheck*)",
+      "Bash(pnpm test*)",
+      "Bash(pnpm build*)",
+      "Bash(pnpm db:generate*)",
+      "Bash(pnpm devkit*)",
+      "Bash(pnpm -s devkit*)",
+      "Bash(pnpm exec biome *)",
+      "Bash(pnpm exec vitest *)",
+      "Bash(pnpm exec playwright *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git switch *)",
+      "Bash(git branch*)",
+      "Bash(git merge *)",
+      "Bash(git revert *)",
+      "Bash(git worktree *)",
+      "Bash(git rev-parse*)",
+      "Bash(git merge-base*)",
+      "Bash(git symbolic-ref*)",
+      "Bash(git reset --keep *)",
+      "Bash(gh pr view*)",
+      "Bash(gh pr checks*)",
+      "Bash(gh pr diff*)",
+      "Bash(gh run view*)",
+      "Bash(gh run list*)",
+      "Bash(pnpm standard:check*)",
+      "Bash(pnpm standard:release*)",
+      "Bash(pnpm -s devkit status*)",
+      "Bash(pnpm devkit status*)"
+    ],
+    "ask": [
+      "Bash(node scripts/devkit/devkit.mjs approve*)",
+      "Bash(pnpm -s devkit approve*)",
+      "Bash(pnpm devkit approve*)",
+      "Bash(pnpm devkit resume --add-cycles*)",
+      "Bash(pnpm -s devkit resume --add-cycles*)",
+      "Bash(git push*)",
+      "Bash(gh pr create*)",
+      "Bash(gh pr merge*)",
+      "Bash(pnpm add *)",
+      "Bash(pnpm remove *)",
+      "Bash(pnpm rm *)",
+      "Bash(pnpm uninstall *)",
+      "Bash(pnpm up*)",
+      "Bash(pnpm update*)",
+      "Bash(pnpm upgrade*)",
+      "Bash(pnpm dlx *)",
+      "Bash(pnpm db:migrate*)",
+      "Bash(docker *)",
+      "Bash(pnpm db:setup*)",
+      "Bash(pnpm db:up*)",
+      "Bash(pnpm devkit reject*)",
+      "Bash(pnpm devkit answer*)",
+      "Bash(pnpm devkit proposal accept*)",
+      "Bash(pnpm devkit proposal reject*)",
+      "Bash(pnpm devkit archive*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.development*)",
+      "Read(./.env.production*)",
+      "Edit(./.devkit/state.json)",
+      "Write(./.devkit/state.json)",
+      "Edit(./.devkit/controls.json)",
+      "Write(./.devkit/controls.json)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)",
+      "Bash(* --no-verify*)",
+      "Edit(./docs/decisions.md)",
+      "Write(./docs/decisions.md)",
+      "Edit(./.devkit/run.json)",
+      "Write(./.devkit/run.json)",
+      "Edit(./docs/standard/**)",
+      "Write(./docs/standard/**)",
+      "Edit(./scripts/devkit/**)",
+      "Write(./scripts/devkit/**)",
+      "Edit(./scripts/standard/**)",
+      "Write(./scripts/standard/**)",
+      "Bash(git update-index*)",
+      "Read(./.env.*.local)",
+      "Read(./.env.staging*)",
+      "Read(./.env.test*)",
+      "Edit(./.devkit/config.json)",
+      "Write(./.devkit/config.json)",
+      "Edit(./.devkit/journal.jsonl)",
+      "Write(./.devkit/journal.jsonl)",
+      "Edit(./docs/exceptions.json)",
+      "Write(./docs/exceptions.json)",
+      "Bash(* devkit approve*)",
+      "Bash(* devkit reject*)",
+      "Bash(* devkit answer*)",
+      "Bash(* devkit record*)",
+      "Bash(* devkit proposal accept*)",
+      "Bash(* devkit proposal reject*)",
+      "Bash(* devkit exception add*)",
+      "Bash(* --add-cycles*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/scripts/devkit/devkit.mjs", "brief"],
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-edits.mjs"],
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-bash.mjs"],
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-read.mjs"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/format-file.mjs"],
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

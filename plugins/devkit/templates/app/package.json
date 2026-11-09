@@ -1,0 +1,59 @@
+{
+  "name": "devkit-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1",
+    "build": "next build",
+    "start": "next start",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "db:up": "docker compose up -d db",
+    "db:setup": "docker compose up -d --wait db && drizzle-kit migrate",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "standard:check": "node scripts/standard/check.mjs",
+    "standard:release": "node scripts/standard/check.mjs --release",
+    "verify": "pnpm lint && pnpm typecheck && pnpm standard:check && pnpm test",
+    "verify:full": "pnpm verify && pnpm build && pnpm test:e2e",
+    "devkit": "node scripts/devkit/devkit.mjs"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.15",
+    "clsx": "2.1.1",
+    "drizzle-orm": "0.45.4",
+    "next": "16.4.5",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tailwind-merge": "3.7.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.6",
+    "@playwright/test": "1.65.0",
+    "@tailwindcss/postcss": "4.3.5",
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "drizzle-kit": "0.31.11",
+    "tailwindcss": "4.3.5",
+    "typescript": "6.0.3",
+    "vitest": "5.1.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "devkit-marketplace",
+  "description": "社内標準の Claude Code 開発キット（devkit）の配布元",
+  "owner": { "name": "社内標準オーナー" },
+  "plugins": [
+    {
+      "name": "devkit",
+      "source": "./plugins/devkit",
+      "description": "依頼から仕様・計画を作り、ランナーが作業ごとに実装・機械検証・独立レビュー・統合を進め、人は業務ゲートと技術ゲートで判断する。夜間の無人実行と状態の確認に対応",
+      "version": "4.1.1"
+    }
+  ]
+}

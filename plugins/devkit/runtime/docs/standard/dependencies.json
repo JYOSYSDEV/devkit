@@ -1,0 +1,44 @@
+{
+  "version": "2026.11.2",
+  "node": "24",
+  "note": "ここにある依存は、バージョンを完全固定すれば例外承認なしで使える（TECH-01・TECH-02）。ないものが必要なら実装せずに技術の判断依頼を出す（ESC-01）。名前に * があるものはパターンで、* は / を含まない1文字以上に当てはまる（例: @radix-ui/react-* は @radix-ui/react-dialog に当てはまる）。builtDependencies はインストール時のスクリプト（postinstall など）の実行を許すパッケージ（package.json と pnpm-workspace.yaml の onlyBuiltDependencies に書いてよいもの）。出典は docs/devkit/stack.md の「採用一覧」と「必要になったら使う標準」",
+  "core": {
+    "next": "Web フレームワーク（App Router）",
+    "react": "UI",
+    "react-dom": "UI",
+    "typescript": "言語",
+    "drizzle-orm": "ORM",
+    "drizzle-kit": "マイグレーションの生成と適用",
+    "pg": "PostgreSQL のドライバ（開発・本番）",
+    "@electric-sql/pglite": "テスト・E2E 用のインプロセス PostgreSQL",
+    "zod": "入力検証",
+    "tailwindcss": "スタイル",
+    "@tailwindcss/postcss": "スタイル（PostCSS）",
+    "clsx": "クラス名の結合（shadcn/ui の cn）",
+    "tailwind-merge": "クラス名の結合（shadcn/ui の cn）",
+    "vitest": "単体・結合テスト",
+    "@playwright/test": "E2E テスト",
+    "@biomejs/biome": "整形・lint",
+    "@types/node": "型定義",
+    "@types/react": "型定義",
+    "@types/react-dom": "型定義",
+    "@types/pg": "型定義"
+  },
+  "preApproved": {
+    "better-auth": "認証（ID・パスワード、社内 SSO の OIDC）",
+    "date-fns": "日付の計算",
+    "@date-fns/tz": "タイムゾーン（表示は Asia/Tokyo）",
+    "nodemailer": "メール送信（社内の SMTP）",
+    "@types/nodemailer": "nodemailer の型定義",
+    "@aws-sdk/client-s3": "ファイル保存（S3 互換ストレージ）",
+    "pino": "構造化ログ（JSON）",
+    "class-variance-authority": "shadcn/ui の部品が使う",
+    "lucide-react": "shadcn/ui の部品が使うアイコン",
+    "tw-animate-css": "shadcn/ui の部品が使うアニメーション",
+    "radix-ui": "shadcn/ui の部品が使う（Radix UI の一括パッケージ）",
+    "@radix-ui/react-*": "shadcn/ui の部品が使う（Radix UI の個別パッケージ）"
+  },
+  "builtDependencies": {
+    "esbuild": "vitest・drizzle-kit が使うビルドツール（インストール時にバイナリを用意する）"
+  }
+}

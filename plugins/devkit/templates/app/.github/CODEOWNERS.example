@@ -1,0 +1,14 @@
+# 承認の信頼性のための CODEOWNERS の例（docs/rollout.md の「7. 承認の信頼性」。必須）。
+# 使うときは CODEOWNERS に名前を変え、<org>/<standard-owners> を社内の標準オーナーのチームにする。
+# 既定のブランチのブランチ保護で「Require review from Code Owners」を有効にする。
+#
+# docs/exceptions.json               <org>/<standard-owners>
+# docs/profile.json                  <org>/<standard-owners>
+# docs/decisions.md                  <org>/<standard-owners>
+# docs/standard/                     <org>/<standard-owners>
+# scripts/                           <org>/<standard-owners>
+# .claude/                           <org>/<standard-owners>
+# .devkit/controls.json              <org>/<standard-owners>
+# .devkit/config.json                <org>/<standard-owners>
+# .devkit/journal.jsonl              <org>/<standard-owners>
+# src/server/auth/                   <org>/<standard-owners>

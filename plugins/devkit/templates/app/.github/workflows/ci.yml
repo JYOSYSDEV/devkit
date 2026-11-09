@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# GITHUB_TOKEN はリポジトリを読むだけにする
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # actions はコミットの SHA で固定する（タグは付け替えられるため）。版はコメントに残す
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: devkit の計画を検証（計画がある場合）
+        run: if [ -f .devkit/graph.json ]; then pnpm devkit check; fi
+      - run: pnpm verify
+      - run: pnpm exec playwright install --with-deps chromium
+      # E2E は自分でビルドしてから動かす（playwright.config.ts の webServer）。本番と同じ next build を通すので、
+      # ここでは pnpm build を別に実行しない（ビルドは1回）。手元の仕上げの確認は pnpm verify:full。
+      - run: pnpm test:e2e
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: test-results
+          # test-results/ は失敗した E2E のトレース、test-reports/ は Vitest と Playwright の結果（JSON）
+          path: |
+            test-results
+            test-reports
+          retention-days: 7

@@ -1,0 +1,127 @@
+{
+  "version": 2,
+  "mission": "紙と Excel の経費精算を Web 化する（申請・承認・CSV 出力・SSO）",
+  "spec": "docs/spec/expense-app.md",
+  "branch": "devkit/expense-app",
+  "verify": "pnpm verify",
+  "verifyFull": "pnpm verify:full",
+  "dependencies": {
+    "prod": ["better-auth", "date-fns", "@date-fns/tz"],
+    "dev": []
+  },
+  "limits": {
+    "maxParallel": 3,
+    "maxRounds": 3,
+    "maxAttempts": 3,
+    "maxReplans": 3,
+    "maxCycles": 12,
+    "taskTimeoutMinutes": 60,
+    "verifyTimeoutMinutes": 30,
+    "lookahead": false
+  },
+  "milestones": [
+    {
+      "id": "M1",
+      "title": "基盤（データモデル・役割と権限・利用者の契約）",
+      "approvers": ["business", "technical"],
+      "foundation": true
+    },
+    {
+      "id": "M2",
+      "title": "申請・承認・CSV 出力",
+      "approvers": ["business"]
+    },
+    {
+      "id": "M3",
+      "title": "社内 SSO と受入・本番準備",
+      "approvers": ["business", "technical"],
+      "release": true
+    }
+  ],
+  "nodes": [
+    {
+      "id": "N1",
+      "milestone": "M1",
+      "title": "基盤（スキーマ・認証テーブル・環境変数・役割と権限・利用者の契約・共通レイアウト）",
+      "deps": [],
+      "owns": [
+        "src/db/**",
+        "drizzle/**",
+        "src/lib/env.ts",
+        ".env.example",
+        "src/server/authz.ts",
+        "src/server/users.ts",
+        "src/server/current-user.ts",
+        "src/components/**",
+        "src/app/layout.tsx",
+        "src/app/(app)/layout.tsx",
+        "tests/helpers/**",
+        "tests/unit/schema.test.ts",
+        "tests/unit/authz.test.ts",
+        "tests/unit/env.test.ts"
+      ],
+      "spec": "docs/spec/expense-app.md#5-データモデル",
+      "acceptance": [],
+      "goal": "docs/spec/expense-app.md の 5章のデータモデルと、後続ノードが使う契約（認証用テーブル・環境変数・利用者の型・権限）が用意され、以下をすべて満たす:\n(1) `pnpm db:generate` で生成したマイグレーションが drizzle/ にコミットされ、`pnpm verify` が exit 0。\n(2) src/db/schema.ts に users / expenses / approvals と、Better Auth の Drizzle アダプターが使う sessions / accounts / verifications が定義されている（users は Better Auth の user として使い、department_id と role を持つ）。tests/unit/schema.test.ts で、createTestDb() に全テーブルを作成でき、expenses.amount に 0 と 1,000,001 を入れると CHECK 制約で失敗する（BR-1）ことを確かめるテストが pass する。\n(3) src/lib/env.ts と .env.example に BETTER_AUTH_SECRET・BETTER_AUTH_URL・OIDC_ISSUER・OIDC_CLIENT_ID・OIDC_CLIENT_SECRET が追加され、本番（NODE_ENV=production）では必須、開発・テストでは未設定でも読み込めることを確かめるテストが tests/unit/env.test.ts で pass する。\n(4) src/server/current-user.ts に CurrentUser 型（id・name・role・departmentId）と getCurrentUser(): Promise<CurrentUser | null> がある（ログインは N5 が実装するので、ここでは null を返す）。src/server/authz.ts の can(user, action) について、申請者・課長・部長・経理の4役割それぞれの可否を確かめるテストが tests/unit/authz.test.ts で pass する。\n(5) src/app/(app)/layout.tsx に共通のヘッダーとナビゲーションがあり、`export const dynamic = \"force-dynamic\"` を保つ。\n既存テストの削除・skip・期待値の緩和はしない。owns 外のファイルは変更しない。\nまたは 30 ターンで停止。"
+    },
+    {
+      "id": "N2",
+      "milestone": "M2",
+      "title": "申請（申請者の画面とサーバー処理）",
+      "deps": ["N1"],
+      "owns": ["src/server/expense.ts", "src/app/(app)/expenses/**", "tests/unit/expense.test.ts"],
+      "spec": "docs/spec/expense-app.md#AC-1",
+      "acceptance": ["AC-1", "AC-2", "AC-3", "BR-1", "BR-3"],
+      "goal": "src/server/expense.ts と src/app/(app)/expenses/ に docs/spec/expense-app.md の FR-1、AC-1〜AC-3、BR-1、BR-3 が実装され、以下をすべて満たす:\n(1) `pnpm verify` が exit 0。\n(2) テスト名に \"AC-1\" \"AC-2\" \"AC-3\" を含むテストが tests/unit/expense.test.ts に存在し pass する。AC-2 のテストには 0 円・1 円・1,000,000 円・1,000,001 円の4つの境界値を含む。\n(3) サーバー処理は操作する利用者を引数で受け取る（例: createExpense(db, user, input)）。画面は src/server/current-user.ts の getCurrentUser() で利用者を得て、null ならログイン画面（/login）へ移す。\n(4) 入力検証は Zod スキーマ1つにまとめ、画面の Server Action とテストの両方がそれを使う。\n既存テストの削除・skip・期待値の緩和はしない。owns 外のファイルは変更しない。\nまたは 25 ターンで停止。"
+    },
+    {
+      "id": "N3",
+      "milestone": "M2",
+      "title": "承認（承認者の画面と承認ルール）",
+      "deps": ["N1"],
+      "owns": ["src/server/approval.ts", "src/app/(app)/approvals/**", "tests/unit/approval.test.ts"],
+      "spec": "docs/spec/expense-app.md#AC-4",
+      "acceptance": ["AC-4", "AC-5", "AC-6", "BR-2"],
+      "goal": "src/server/approval.ts と src/app/(app)/approvals/ に docs/spec/expense-app.md の FR-2、AC-4〜AC-6、BR-2 が実装され、以下をすべて満たす:\n(1) `pnpm verify` が exit 0。\n(2) テスト名に \"AC-4\" \"AC-5\" \"AC-6\" \"BR-2\" を含むテストが tests/unit/approval.test.ts に存在し pass する。BR-2 のテストには「99,999 円は課長承認で approved」「100,000 円は課長承認後も部長承認待ち」の2ケースを含む。\n(3) 承認状態の遷移は src/server/approval.ts の transition() だけで行う。承認者は引数で受け取り、自部署の申請だけを扱う（AC-4）。画面は getCurrentUser() で利用者を得る。\n既存テストの削除・skip・期待値の緩和はしない。owns 外のファイルは変更しない。\nまたは 25 ターンで停止。"
+    },
+    {
+      "id": "N4",
+      "milestone": "M2",
+      "title": "CSV 出力（経理）",
+      "deps": ["N1"],
+      "owns": ["src/server/export.ts", "src/app/api/export/**", "tests/unit/export.test.ts"],
+      "spec": "docs/spec/expense-app.md#AC-7",
+      "acceptance": ["AC-7", "AC-8", "BR-4"],
+      "goal": "src/server/export.ts と src/app/api/export/route.ts に docs/spec/expense-app.md の FR-3、AC-7、AC-8、BR-4 が実装され、以下をすべて満たす:\n(1) `pnpm verify` が exit 0。\n(2) テスト名に \"AC-7\" \"AC-8\" \"BR-4\" を含むテストが tests/unit/export.test.ts に存在し pass する。BR-4 のテストでは出力の先頭3バイトが UTF-8 の BOM であることと、ヘッダー行が仕様どおりであることを確かめる。\n(3) ルートハンドラは getCurrentUser() で利用者を得て、can(user, \"export\") が false なら 403 を返す（AC-8）。\n既存テストの削除・skip・期待値の緩和はしない。owns 外のファイルは変更しない。\nまたは 20 ターンで停止。"
+    },
+    {
+      "id": "N5",
+      "milestone": "M3",
+      "title": "社内 SSO ログイン（Better Auth + OIDC）",
+      "deps": ["N1"],
+      "owns": [
+        "src/auth/**",
+        "src/app/api/auth/**",
+        "src/app/login/**",
+        "src/proxy.ts",
+        "src/server/current-user.ts",
+        "tests/unit/auth.test.ts"
+      ],
+      "spec": "docs/spec/expense-app.md#AC-9",
+      "acceptance": ["AC-9"],
+      "goal": "src/auth/、src/app/api/auth/、src/app/login/、src/proxy.ts、src/server/current-user.ts に docs/spec/expense-app.md の FR-4 と AC-9 が Better Auth の OIDC で実装され、以下をすべて満たす:\n(1) `pnpm verify` が exit 0。\n(2) Better Auth は N1 が src/db/schema.ts に定義した users / sessions / accounts / verifications を Drizzle アダプターで使い、設定値は src/lib/env.ts の loadEnv() から読む（process.env を直接読まない）。\n(3) getCurrentUser() がログイン中の利用者（role・departmentId を含む）を返し、未ログインなら null を返す。関数の形（引数と戻り値の型）は N1 の契約から変えない。\n(4) テスト名に \"AC-9\" を含むテストが tests/unit/auth.test.ts に存在し pass する。テストは OIDC プロバイダーを差し替えたもので行い、外部には接続しない。E2E 用のテストログインを src/auth/ に用意し、DATABASE_URL が pglite:// のときだけ有効になる（postgres:// では無効になる）ことをテストで確かめる。\nスキーマや環境変数の追加が必要になったら needs に書く（src/db/ と src/lib/env.ts は変更しない）。既存テストの削除・skip・期待値の緩和はしない。owns 外のファイルは変更しない。.env は読まない・変更しない。\nまたは 25 ターンで停止。",
+      "before": ["technical"]
+    },
+    {
+      "id": "N6",
+      "milestone": "M3",
+      "title": "結合と E2E（一連の流れ）",
+      "deps": ["N2", "N3", "N4", "N5"],
+      "owns": ["e2e/**", "src/app/page.tsx"],
+      "spec": "docs/spec/expense-app.md#AC-10",
+      "acceptance": ["AC-10"],
+      "goal": "docs/spec/expense-app.md の AC-10 の一連の流れが画面から行え、以下をすべて満たす:\n(1) `pnpm verify:full` が exit 0（ビルドと Playwright の E2E を含む）。\n(2) e2e/expense-flow.spec.ts に、テスト名に \"AC-10\" を含み「申請 → 課長承認 → 部長承認 → CSV 出力」を通しで操作するテストがあり pass する。ログインは N5 のテストログインで行う。\n(3) DB を読む画面はすべて src/app/(app)/ の下にあり、`pnpm build` がビルド中に DB へ接続しない。\n既存テストの削除・skip・期待値の緩和はしない。owns 外のファイルは変更しない。\nまたは 30 ターンで停止。",
+      "verify": "full"
+    }
+  ]
+}

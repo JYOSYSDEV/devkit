@@ -1,0 +1,375 @@
+{
+  "version": "2026.11.2",
+  "layers": {
+    "1-technology": "1. 技術",
+    "2-design": "2. 設計",
+    "3-quality-security": "3. 品質・セキュリティ",
+    "4-operations": "4. 運用",
+    "5-exceptions": "5. 例外"
+  },
+  "kinds": {
+    "auto": {
+      "label": "自動検査",
+      "description": "標準チェッカー（pnpm standard:check）が機械的に検査する。違反は pnpm verify の失敗。release: true のものはリリース前の検査（pnpm standard:release）だけで行う"
+    },
+    "lint": {
+      "label": "lint",
+      "description": "Biome の lint ルールで検査する。違反は pnpm verify の失敗"
+    },
+    "runner": {
+      "label": "ランナーの検証",
+      "description": "devkit のランナーが作業ごとの機械検証（受け入れ基準のテスト・テストの弱体化・pnpm verify・保護ファイル）で検査する"
+    },
+    "flag": {
+      "label": "変更検出→人間ゲート",
+      "description": "標準チェッカーが変更を検出したら（--base）、人間ゲート（role が business なら業務ゲート、technical なら技術ゲート）での確認を必須にする"
+    },
+    "review": {
+      "label": "独立レビュー（AI）",
+      "description": "実装とは別のレビュー役の AI が差分を読んで確かめる"
+    },
+    "human": {
+      "label": "人間ゲート",
+      "description": "人間ゲートで人が確かめる"
+    }
+  },
+  "rules": [
+    {
+      "id": "TECH-01",
+      "layer": "1-technology",
+      "title": "標準スタック以外の依存を使わない",
+      "check": "auto",
+      "summary": "package.json（ルートとワークスペースのサブパッケージ）の依存、pnpm-workspace.yaml の catalog、pnpm.packageExtensions が足す依存は、docs/standard/dependencies.json の許可リスト（core・preApproved）か、承認済みの例外（subject: dependency:<名前>）にあるものだけにする。インストール時のスクリプトを許す onlyBuiltDependencies は builtDependencies に書いたものだけ"
+    },
+    {
+      "id": "TECH-02",
+      "layer": "1-technology",
+      "title": "依存のバージョンを完全固定する",
+      "check": "auto",
+      "summary": "依存のバージョンは \"1.2.3\" の完全一致で書く（^ ~ * latest・範囲・git・URL・ファイル・npm: の別名を使わない）。pnpm.overrides・overrides・resolutions・pnpm.packageExtensions・pnpm-workspace.yaml の overrides と catalog、catalog: で参照した版も同じ。依存へのパッチ（patchedDependencies）と .pnpmfile.cjs は使わない。packageManager に pnpm の版を固定し、pnpm-lock.yaml をコミットする（ほかのロックファイルは置かない）"
+    },
+    {
+      "id": "TECH-03",
+      "layer": "1-technology",
+      "title": "Node.js は標準の LTS を使う",
+      "check": "auto",
+      "summary": ".nvmrc（なければ .node-version）と Dockerfile の node イメージ（ARG の既定値も解決する）のメジャー版を、dependencies.json の node と一致させる"
+    },
+    {
+      "id": "TECH-04",
+      "layer": "1-technology",
+      "title": "採用しない技術を持ち込まない",
+      "check": "review",
+      "summary": "Kubernetes、マイクロサービス分割、Kafka、Redis、Elasticsearch / OpenSearch、MongoDB、GraphQL、別言語のバックエンド、クライアントのフォームライブラリ、Prisma などの別の ORM は、ADR と例外承認なしに導入しない"
+    },
+    {
+      "id": "DEPS",
+      "layer": "1-technology",
+      "title": "依存の変更は技術ゲートで確認する",
+      "check": "flag",
+      "role": "technical",
+      "summary": "package.json（ワークスペースのサブパッケージを含む）の依存の追加と版の変更、pnpm の設定（overrides・packageExtensions・patchedDependencies・onlyBuiltDependencies）・overrides・resolutions・packageManager の変更、pnpm-workspace.yaml・.pnpmfile・.npmrc の変更を検出したら（--base）、技術ゲートで許可リストと必要性を確認する"
+    },
+    {
+      "id": "ARCH-01",
+      "layer": "2-design",
+      "title": "決まった場所に置く",
+      "check": "review",
+      "summary": "サーバー処理は src/server/<機能>.ts、DB を読む画面は src/app/(app)/<画面>/page.tsx、データの更新はその画面の actions.ts、画面専用の部品はその画面の components/、共通の部品は src/components/ に置く（2-design.md の構成）"
+    },
+    {
+      "id": "ARCH-02",
+      "layer": "2-design",
+      "title": "DB アクセスはサーバー処理に閉じる",
+      "check": "auto",
+      "summary": "drizzle-orm・pg・postgres・PGlite の import と、db.select / insert / update / delete / query / execute / transaction などの直接の DB 操作は、src/server/**・src/db/**・テストだけで行う。それ以外（src の外を含む）から @/db/* に触れてよいのは、import { getDb } from \"@/db/client\" と、src/server の関数の引数に直接渡す f(await getDb()) と、@/db/schema の import type だけ（変数に入れる・別名にする・Db 型で受けて操作するのは違反）"
+    },
+    {
+      "id": "ARCH-03",
+      "layer": "2-design",
+      "title": "データの更新は defineAction で定義する",
+      "check": "auto",
+      "summary": "\"use server\" ファイル（src の外を含む）の export は、すべて export const 名前 = defineAction({ ... }) の形で作り、宣言子ごとに確かめる（export const a = defineAction(…), b = … の b も対象）。defineAction は @/server/action から import する。関数の中の \"use server\"（インラインの Server Action）、export { }、export default、export let / var、分割代入の export は使わない。defineAction は src/server/action.ts に置く"
+    },
+    {
+      "id": "ARCH-04",
+      "layer": "2-design",
+      "title": "クライアントコンポーネントは components/ に置く",
+      "check": "auto",
+      "summary": "\"use client\" は src/components/**・src/app/**/components/**（ルートの components/・app/ も同じ）と error.tsx・global-error.tsx だけに書く。クライアントコンポーネントから @/server/**・@/db/**・@/lib/env・@/lib/logger と DB のパッケージを import しない（型だけの import type は可）"
+    },
+    {
+      "id": "ARCH-05",
+      "layer": "2-design",
+      "title": "環境変数は1か所で読む",
+      "check": "auto",
+      "summary": "process.env を読むのは src/lib/env.ts だけ（テストとルートの *.config.* を除く。src の外のコードも対象）。import * as p from \"node:process\" や default import・分割代入・globalThis 経由も同じ。クライアントのコードでは、ビルド時に置き換わる process.env.NODE_ENV と process.env.NEXT_PUBLIC_* だけを直接読んでよい"
+    },
+    {
+      "id": "ARCH-06",
+      "layer": "2-design",
+      "title": "複数テーブルの更新はトランザクションにする",
+      "check": "review",
+      "summary": "1つの操作で複数のテーブルを更新するときは db.transaction で囲む（defineAction の handler が受け取る db は、監査ログと同じトランザクション）"
+    },
+    {
+      "id": "ARCH-07",
+      "layer": "2-design",
+      "title": "外部サービスの呼び出しは分離し、タイムアウトを付ける",
+      "check": "review",
+      "summary": "外部 API・メール送信・ファイル保存などの呼び出しは src/server/external/ に置き、タイムアウト（AbortSignal.timeout など）を必ず付ける。接続先は docs/profile.json の externalHosts に登録する"
+    },
+    {
+      "id": "ARCH-08",
+      "layer": "2-design",
+      "title": "内部情報を画面に出さない",
+      "check": "review",
+      "summary": "例外のメッセージやスタックトレース、SQL、内部 ID の仕組みを画面や API の応答に出さず、利用者向けの日本語のメッセージに変える（defineAction が行う）"
+    },
+    {
+      "id": "ARCH-09",
+      "layer": "2-design",
+      "title": "ログは構造化ログで出す",
+      "check": "lint",
+      "summary": "src では console.* を使わず src/lib/logger.ts の logger を使う（Biome の suspicious/noConsole。テストは除く）"
+    },
+    {
+      "id": "ARCH-10",
+      "layer": "2-design",
+      "title": "画面は日本語・アクセシブルにする",
+      "check": "review",
+      "summary": "文言は日本語、日付は Asia/Tokyo で表示する。入力欄には label を付け、エラーは欄の直下に aria-describedby で結び、処理結果は role=\"status\" に出す"
+    },
+    {
+      "id": "ARCH-11",
+      "layer": "2-design",
+      "title": "コードは検査できる形で置く",
+      "check": "auto",
+      "summary": "シンボリックリンク（.md を除く）、NUL を含むコード、5MB を超えるコード、読めないディレクトリを置かない（検査の外のコードを画面や API に入れられるため。生成物は node_modules・.next・dist・build などの除外されるディレクトリに出す）。tsconfig*.json の paths は { \"@/*\": [\"./src/*\"] } だけにする"
+    },
+    {
+      "id": "DATA",
+      "layer": "2-design",
+      "title": "データモデルの変更は技術ゲートで確認する",
+      "check": "flag",
+      "role": "technical",
+      "summary": "DB のスキーマ（src/db/schema*.ts）とマイグレーション（drizzle/）の変更を検出したら、テーブル・列・制約を技術ゲートで確認する。チェッカーは変更があれば常にフラグを出し、どのマイルストーンで技術ゲートを必須にするか（データモデルを決める基盤のマイルストーンかどうか）はランナーが決める"
+    },
+    {
+      "id": "QA-01",
+      "layer": "3-quality-security",
+      "title": "受け入れ基準ごとにテストを書く",
+      "check": "runner",
+      "summary": "仕様の受け入れ基準 AC-n ごとに、テスト名に AC-n を含むテストを1つ以上用意して合格させる（画面の流れは E2E）。ランナーが実行結果と照合する"
+    },
+    {
+      "id": "QA-02",
+      "layer": "3-quality-security",
+      "title": "テストを弱めない",
+      "check": "runner",
+      "summary": ".skip・.only・.todo・test.fixme の追加、既存のテストや expect の削除、期待値を実装に合わせて緩めることをしない。ランナーと編集ガードが検出する"
+    },
+    {
+      "id": "QA-03",
+      "layer": "3-quality-security",
+      "title": "完了の定義は pnpm verify の成功",
+      "check": "runner",
+      "summary": "lint・型チェック・標準チェック・単体テストをまとめた pnpm verify が exit 0 であること（仕上げは pnpm verify:full でビルドと E2E を加える）。ランナーが自分で実行して確かめる"
+    },
+    {
+      "id": "QA-04",
+      "layer": "3-quality-security",
+      "title": "業務ルールは単体テストで境界まで確かめる",
+      "check": "review",
+      "summary": "仕様の業務ルール BR-n は、境界値と例外のケースを単体テスト（PGlite の実物の DB）で確かめ、テスト名に BR-n を入れる"
+    },
+    {
+      "id": "QA-05",
+      "layer": "3-quality-security",
+      "title": "E2E は利用者の目線で書く",
+      "check": "review",
+      "summary": "E2E は getByLabel・getByRole・getByText で要素を探し、CSS セレクタや内部 ID に頼らない。自分で作ったデータだけを確かめる"
+    },
+    {
+      "id": "SEC-01",
+      "layer": "3-quality-security",
+      "title": "すべての操作に権限を指定する",
+      "check": "auto",
+      "summary": "defineAction の引数はその場で書いたオブジェクトにし、permission を文字列で直接書く（一番外側でスプレッドや計算されたキーを使わない。defineAction を別名にしない）。その権限は src/server/auth/permissions.ts の PERMISSIONS にあること"
+    },
+    {
+      "id": "SEC-02",
+      "layer": "3-quality-security",
+      "title": "入力はサーバー側で検証する",
+      "check": "auto",
+      "summary": "defineAction には Zod スキーマの input を必ず書く（z.any()・z.unknown() は使わない。画面側の検証だけに頼らない）"
+    },
+    {
+      "id": "SEC-03",
+      "layer": "3-quality-security",
+      "title": "HTML を直接差し込まない",
+      "check": "auto",
+      "summary": "dangerouslySetInnerHTML、innerHTML / outerHTML への代入、insertAdjacentHTML、document.write、createContextualFragment を使わない"
+    },
+    {
+      "id": "SEC-04",
+      "layer": "3-quality-security",
+      "title": "SQL を文字列で組み立てない",
+      "check": "auto",
+      "summary": "sql.raw（別名・再公開した別名・sql[\"raw\"]・分割代入の raw を含む）と、文字列の SQL（文字列リテラルか文字列の変数）を直接渡す .execute / .query / .exec / .unsafe を、src/server を含むすべてのコードで使わない。値は Drizzle のクエリビルダか sql`…` のタグ付きテンプレートのプレースホルダで渡す（正規表現の .exec は対象外）"
+    },
+    {
+      "id": "SEC-05",
+      "layer": "3-quality-security",
+      "title": "秘密情報をコードに書かない",
+      "check": "auto",
+      "summary": "API キー・トークン（Stripe の sk_live_ などを含む）・パスワード・秘密鍵・Webhook URL・パスワード付きの接続文字列をリポジトリに書かない。password・pass・secret・token・apiKey を名前に含む変数や項目（dbPassword・smtpAuth.pass など。src の外の設定ファイルも対象）に値を直書きしない。環境変数（本番はシークレット管理）から読む。localhost の開発用の DB、compose の開発用 DB サービス、プレースホルダ（USER:PASSWORD@HOST・<…>・${…}）、テストの中の接続文字列は可。読めないファイル（NUL を含む・20MB 超）は違反"
+    },
+    {
+      "id": "SEC-06",
+      "layer": "3-quality-security",
+      "title": "セキュリティヘッダを設定する",
+      "check": "auto",
+      "summary": "next.config.ts の headers() で、すべてのパスに X-Content-Type-Options: nosniff・X-Frame-Options（か CSP の frame-ancestors）・Referrer-Policy・Strict-Transport-Security・Content-Security-Policy（object-src 'none'・base-uri 'none' か 'self'・frame-ancestors 'none' を含む）を設定する。値は headers() が参照する定数や、import した関数（src/lib/security-headers.ts の contentSecurityPolicy() など）で組み立ててよい"
+    },
+    {
+      "id": "SEC-07",
+      "layer": "3-quality-security",
+      "title": "監査ログの要否を明示する",
+      "check": "auto",
+      "summary": "defineAction には audit: true / false を必ず書く。登録・更新・削除・権限変更は true にして監査ログ（src/server/audit.ts）に残す。defineAction は処理と監査ログを1つのトランザクションで書き、権限のない操作の試みも記録する"
+    },
+    {
+      "id": "SEC-08",
+      "layer": "3-quality-security",
+      "title": "個人情報の追加は技術ゲートで確認する",
+      "check": "flag",
+      "role": "technical",
+      "summary": "氏名（sei・mei・shimei を含む）・メール・電話（tel1 などの番号付きを含む）・住所（address1 など）・生年月日・社員番号・連絡先（contact）などの項目を DB に追加したら（pgTable( の後で改行する書き方も検出する）、保護の方法（閲覧できる人・ログへの出力・保持期間）を技術ゲートで確認し、docs/profile.json の personalData に記録する"
+    },
+    {
+      "id": "SEC-09",
+      "layer": "3-quality-security",
+      "title": "本番で開発用の認証を使わない",
+      "check": "auto",
+      "release": true,
+      "summary": "本番リリース前に docs/profile.json の auth を dev 以外にし、その方式を実装する（better-auth・sso-* なら src/server/auth/session.ts で Better Auth を使う）。AUTH_MODE=dev と DEVKIT_E2E_AUTH をデプロイの設定と本番のビルド・起動のスクリプトに書かない。auth: none（認証なしの公開）は例外承認（subject: auth:none）が必要"
+    },
+    {
+      "id": "SEC-10",
+      "layer": "3-quality-security",
+      "title": "ログに個人情報や秘密情報を出さない",
+      "check": "review",
+      "summary": "logger に入力値そのもの・パスワード・トークン・個人情報を渡さない。ID で記録する"
+    },
+    {
+      "id": "SEC-11",
+      "layer": "3-quality-security",
+      "title": "画面と API の入口で利用者と権限を確かめる",
+      "check": "auto",
+      "summary": "app/ の page.tsx と route.ts（メソッドごと）は、関数の最初の文で @/server/auth/guard の requireUser / requirePermission を呼んで結果を変数に受け、次の文で if (!結果.ok) から return / redirect() / notFound() / throw で抜ける（結果を捨てる・分割代入するのは違反）。認証なしで公開するものは allowAnonymous(\"理由\") で意図を明示する。layout・template・not-found・generateMetadata・opengraph-image・twitter-image・icon・sitemap・robots・manifest も、DB や src/server の処理に触れるなら同じ。メソッドは関数として直接 export する（分割代入で許すのは app/api/auth/ の Better Auth の export const { GET, POST } = toNextJsHandler(auth) だけ）。pages/（Pages Router）と、src/app と並ぶルートの app/ は使わない"
+    },
+    {
+      "id": "SEC-12",
+      "layer": "3-quality-security",
+      "title": "安全の仕組みの中心の変更は技術ゲートで確認する",
+      "check": "flag",
+      "role": "technical",
+      "summary": "defineAction・監査ログ・認証（src/server/auth/。権限表を除く）・環境変数・ロガー・DB 接続・next.config とそれが読み込むファイル（src/lib/security-headers.ts など）・proxy / middleware / instrumentation とそれが読み込むファイル・tsconfig*.json（import の解決）・権限表が読み込むファイルと can() の実装・Dockerfile・.dockerignore・compose.yaml・.github/・.gitattributes・docs/profile.json・docs/exceptions.json・標準（docs/standard/・scripts/standard/）・シンボリックリンクを変えたら、技術ゲートで差分を確認する。差分を取得できないときも安全側に倒して技術ゲートで確認する"
+    },
+    {
+      "id": "OPS-01",
+      "layer": "4-operations",
+      "title": "案件プロファイルを宣言する",
+      "check": "auto",
+      "summary": "docs/profile.json に運用レベル（tier: lite / standard / ha）・認証方式（auth）・外部接続先（externalHosts）・個人情報（personalData）・リリース状況を書く。リリース前に案件名と業務担当者・技術担当者（名前とメール）を記入する"
+    },
+    {
+      "id": "OPS-02",
+      "layer": "4-operations",
+      "title": "ヘルスチェックを用意する",
+      "check": "auto",
+      "summary": "GET /api/health（src/app/api/health/route.ts）が DB 接続を確かめて 200 を返す（失敗なら 503）"
+    },
+    {
+      "id": "OPS-03",
+      "layer": "4-operations",
+      "title": "本番のマイグレーションは起動時に適用しない",
+      "check": "auto",
+      "summary": "本番の PostgreSQL へのマイグレーションは、デプロイの手順で人が pnpm db:migrate を実行する。アプリのコード（PGlite 用を除く migrator。src の外のコードも対象）・Dockerfile の CMD / ENTRYPOINT・compose の command・package.json の start で適用しない"
+    },
+    {
+      "id": "OPS-04",
+      "layer": "4-operations",
+      "title": "リリース後は破壊的なスキーマ変更をしない",
+      "check": "auto",
+      "summary": "本番リリース後（released: true）は releasedMigration に本番適用済みの最後のマイグレーション名を書く。それより後のマイグレーションで、DROP（TABLE・COLUMN・CONSTRAINT・INDEX・VIEW・TYPE・SCHEMA・FUNCTION・TRIGGER・POLICY など。COLUMN を省いた ALTER TABLE … DROP や、ADD と並べた DROP も）・TRUNCATE・DELETE・名前の変更・型の変更（COLUMN を省いた ALTER … TYPE も）・中身を検査できない動的な SQL（EXECUTE）をせず、追加→移行→削除の段階的な変更にする。文字列とコメントの中は対象外、$$ の中と EXECUTE の文字列は対象。適用済みのマイグレーションのファイルは変えない（--base で検出）。必要なら例外承認（subject: migration:<ファイル名>）を受ける"
+    },
+    {
+      "id": "OPS-05",
+      "layer": "4-operations",
+      "title": "運用手順書を用意する",
+      "check": "auto",
+      "release": true,
+      "summary": "本番リリース前に docs/runbook.md の必須の見出し（起動と停止・デプロイ・マイグレーション・バックアップと復元・監視と通知・障害時の連絡先）をすべて埋める（「（記入）」「未記入」が残っていたら未完了）"
+    },
+    {
+      "id": "OPS-06",
+      "layer": "4-operations",
+      "title": "運用レベル別の必須事項を満たす",
+      "check": "human",
+      "summary": "04-operations.md の運用レベル表の必須事項（実行環境・バックアップ・復元演習・監視・リリース方式）を、本番リリース前の技術ゲートで確かめる"
+    },
+    {
+      "id": "OPS-07",
+      "layer": "4-operations",
+      "title": "デプロイと本番操作は人が行う",
+      "check": "human",
+      "summary": "AI はデプロイ・本番 DB の操作・クラウドの設定変更・シークレットの操作をしない。リリースは業務ゲートと技術ゲートの承認後に人が実行する"
+    },
+    {
+      "id": "ESC-01",
+      "layer": "5-exceptions",
+      "title": "標準外の技術が必要なら止まる",
+      "check": "auto",
+      "summary": "許可リストにない依存・ツール・クラウドサービスが必要になったら、実装せずに技術の判断依頼を出して止まる（依存は TECH-01 の許可リストの検査で機械的に検出する）"
+    },
+    {
+      "id": "ESC-02",
+      "layer": "5-exceptions",
+      "title": "新しい外部接続は技術ゲートで確認する",
+      "check": "flag",
+      "role": "technical",
+      "summary": "docs/profile.json の externalHosts にない接続先（URL・ホスト名・IP アドレス。src の外の設定ファイル・.env の KEY=ホスト・public/ も対象）が加わったら、外部への呼び出し（fetch とその別名・WebSocket・EventSource・sendBeacon など）や、ネットワークと外部コマンドを使うパッケージ（@aws-sdk/*・nodemailer・axios・child_process など）の import が src/server/external/ の外に加わったら、src/server/external/ が変わったら、技術ゲートで確認する"
+    },
+    {
+      "id": "ESC-03",
+      "layer": "5-exceptions",
+      "title": "権限表の変更は業務ゲートで確認する",
+      "check": "flag",
+      "role": "business",
+      "summary": "src/server/auth/permissions.ts（誰が何をできるか）と、それが読み込む案件のファイル（役割のまとまりなど）が変わったら、業務ゲートで権限表を確認する"
+    },
+    {
+      "id": "ESC-04",
+      "layer": "5-exceptions",
+      "title": "仕様にない業務判断は止まって聞く",
+      "check": "review",
+      "summary": "業務ルールが仕様にない・解釈が分かれる場合で、仕様の「前提」でも決められないときは、業務の判断依頼を出して止まる"
+    },
+    {
+      "id": "ESC-05",
+      "layer": "5-exceptions",
+      "title": "保護ファイルの変更が必要なら止まる",
+      "check": "runner",
+      "summary": "標準・仕様・計画・案件プロファイル・例外・設定ファイルの変更が必要になったら、実装せずに技術の判断依頼を出して止まる。エージェントが変えた場合、ランナーは元に戻してその試行を不合格にする"
+    },
+    {
+      "id": "ESC-06",
+      "layer": "5-exceptions",
+      "title": "例外は承認の記録とともに登録する",
+      "check": "auto",
+      "summary": "docs/exceptions.json の例外には id・rules・subject・reason・adr（存在するファイル）・approvedBy・approvedAt・reviewBy（実在する日付）を書く。記録が欠けた例外は適用しない。見直し期限を過ぎた例外は普段は注意、リリース前の検査では違反。subject \"*\"（ルール全体を外す）は毎回注意として表示する。ESC-06 自体は例外にできない"
+    }
+  ]
+}
