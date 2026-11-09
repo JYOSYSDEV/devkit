@@ -132,10 +132,74 @@ private リポジトリなら、利用者の環境から GitHub に認証でき�
 - ランナーが落ちても、次の起動で中断した作業を照合して続ける（途中のマージは取り消してやり直し、途中の作業は同じブランチの続きから）。二重起動はロックで断る。
 - 1晩の上限: `--max-cost-usd`（ランナー全体）、`limits.taskBudgetUsd`（1回の実装）、`limits.taskTimeoutMinutes`・`verifyTimeoutMinutes`。
 
+## 5b. Supervisor（判断の後の自動の再開）と定時ブリーフィング（4.3.0）
+
+Supervisor は、ランナーの外側で「今ランナーを1つ起動してよいか」を決め続ける常駐のプロセスです（ADR-0006）。人が朝に判断（承認・回答）すると、だれかが `pnpm devkit run` を打たなくても続きを進めます。毎朝の定時ブリーフィングも Supervisor が作って送ります。
+
+- **起動するのは、次がすべてそろったときだけ**: ランナーが動いていない・状態が進行中・計画が承認済み・記録に不整合がない・再試行の待ちを過ぎた・時間帯の中・日ごとの上限の中・人の決定を反映した状態で実行できる作業がある（誤った役割の判断・古い版への承認では作業が増えないので起動しない）。起動の直前にも確かめ直す。
+- **止まる・待つ**: 一時的な障害は待って最大3回、利用上限は復帰の時刻まで待つ。認証切れ・環境の問題・上限・記録の不整合では止まり、標準オーナーに知らせる。止まったら、原因を直してから標準オーナーが端末で `pnpm devkit supervisor clear --role 技術 --note "<直したこと>"`。手動で止めるのは `pnpm devkit supervisor stop <理由>`（実行中のランナーは止めない。止めるなら `pnpm devkit pause`）。
+- **API の課金に切り替えない**: `ANTHROPIC_API_KEY` などは、`supervisor.allowApiKey: true` にしない限り、Supervisor が起動するランナーに渡さない。Claude Code の通常のログイン（サブスクリプション）で回す前提。
+
+```bash
+pnpm devkit supervisor run            # 前面で動かす（Ctrl-C で止める）
+pnpm devkit supervisor start          # 切り離して動かす（ログは .devkit/logs/supervisor-<時刻>.log）
+pnpm devkit supervisor status         # 状態・次の照合での判断・再試行の予定・配信の状況
+pnpm devkit briefing --print          # 今朝のブリーフィングを表示だけ（--partial で前回の締切から今まで）
+pnpm devkit briefing --send           # 作って保存し、送る（同じ締切の分は2回送らない）
+```
+
+常時動かすときは、OS のサービスとして登録する（落ちたら起動し直す。起動し直しても、試行回数・日ごとの起動回数は数え直さない）。
+
+```ini
+# systemd: /etc/systemd/system/devkit-supervisor-equipment.service
+[Unit]
+Description=devkit supervisor (equipment)
+After=network-online.target docker.service
+
+[Service]
+User=devkit
+WorkingDirectory=/srv/projects/equipment
+Environment=DEVKIT_NOTIFY_CMD=node scripts/devkit/notify-slack.mjs
+EnvironmentFile=-/etc/devkit/equipment.env
+ExecStart=/usr/bin/env pnpm devkit supervisor run
+Restart=always
+RestartSec=30
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```xml
+<!-- macOS launchd: ~/Library/LaunchAgents/com.example.devkit-supervisor.plist（スリープさせない設定と併用） -->
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.example.devkit-supervisor</string>
+  <key>WorkingDirectory</key><string>/Users/devkit/projects/equipment</string>
+  <key>ProgramArguments</key><array><string>/usr/bin/caffeinate</string><string>-i</string><string>/usr/bin/env</string><string>pnpm</string><string>devkit</string><string>supervisor</string><string>run</string></array>
+  <key>KeepAlive</key><true/>
+</dict></plist>
+```
+
+`.devkit/config.json`（人が編集する。Claude からは変えられない）の設定:
+
+| 設定 | 既定 | 意味 |
+| --- | --- | --- |
+| `briefing.time`・`briefing.timeZone` | `"08:00"`・`"Asia/Tokyo"` | 締切。前回の締切から今回の締切までを集計する |
+| `briefing.to` | `"common"` | 送り先（`DEVKIT_NOTIFY_CMD`。なければ技術・業務の送り先）。`technical`・`business` も選べる |
+| `briefing.enabled` | `true` | ブリーフィングを作るか |
+| `supervisor.intervalSeconds` | `20` | 照合の間隔（5〜60 秒。判断はファイルの変更の通知でも検知する） |
+| `supervisor.hours` | `null` | 自動で起動してよい時間帯（例 `"22:00-07:00"`。`briefing.timeZone` で判定）。ランナーには終わりの時刻を ISO 8601 で `--until` に渡す（機械のタイムゾーンに左右されない） |
+| `supervisor.maxParallel` | `1` | 自動で起動したランナーの AI の並列数 |
+| `supervisor.retry` | `maxAttempts: 3`・`baseSeconds: 60`・`maxWaitMinutes: 30`・`totalHours: 6`・`maxRateLimitWaitHours: 8` | 一時的な障害と利用上限の待ち方 |
+| `supervisor.limits` | `maxRunsPerDay: 48`・`maxCostUsdPerDay: null`・`maxNoProgressRuns: 3` | 日ごとの上限（超えたら止まり、人が解除する） |
+| `supervisor.allowApiKey` | `false` | API の課金に切り替わる設定をランナーに渡すか |
+
+ブリーフィングの中身（構造化データから決まった形で作る。AI は使わない）: 夜間の成果（新しく完了した作業・マイルストーンと、受入基準・検証・コミット・証跡・残った懸念）、今朝の判断（判断の ID・役割・質問・優先度・推奨と代替・影響・対象の版・確認先・端末のコマンド）、判断後に進む作業（ランナーと同じ判断で求めたもの）、運用状態（ランナーと Supervisor・再試行の予定・残りの上限・使用量の目安・集計の欠落）。保存先は `.devkit/briefings/`、送信待ちは `.devkit/cache/supervisor/outbox/`。
+
 ## 6. 状態の確認と通知
 
 - 別の端末から: `pnpm devkit status`（ランナーの生死・最終応答・誰の番か）、`pnpm devkit status --watch`、`pnpm devkit logs`、`.devkit/status.html`（30秒ごとに自動で読み込み直す1ファイルのページ）。
-- 朝: `.devkit/reports/run-<時刻>.md`（できたこと・人の判断待ち・止まった作業・AI が自分で決めたこと・費用）。
+- 朝: 定時ブリーフィング（`.devkit/briefings/<日付-時刻>.md`。5b）と、実行ごとの `.devkit/reports/run-<時刻>.md`（できたこと・人の判断待ち・止まった作業・AI が自分で決めたこと・費用）。
 - 通知: 環境変数で送り先を分ける（メッセージは `DEVKIT_MESSAGE` で渡り、コマンド文字列には埋め込まれない）。
 
   ```bash
@@ -152,7 +216,7 @@ private リポジトリなら、利用者の環境から GitHub に認証でき�
 
 devkit の人のコマンド（approve など）は、Claude Code の中から実行されたもの（環境変数・親のプロセス）を断り、端末で番号を打ち込んでもらい、承認した人の git のメールを `docs/profile.json` の担当者と照合する（担当者が空なら断る）。それでも、同じ利用者の権限で動くプログラムを完全には見分けられず、なりすましも防げない。案件のリポジトリを GitHub に置くときは、次を必ず設定する。
 
-- `.github/CODEOWNERS` で、`docs/exceptions.json`・`docs/profile.json`・`docs/decisions.md`・`docs/standard/`・`src/server/auth/`・`.devkit/controls.json`・`.devkit/config.json`・`.devkit/journal.jsonl`・`scripts/devkit/`・`scripts/standard/`・`.claude/` を標準オーナーのチームに割り当てる（雛形の `.github/CODEOWNERS.example`）
+- `.github/CODEOWNERS` で、`docs/exceptions.json`・`docs/profile.json`・`docs/decisions.md`・`docs/standard/`・`src/server/auth/`・`.devkit/controls.json`・`.devkit/state.json`・`.devkit/config.json`・`.devkit/journal.jsonl`・`scripts/devkit/`・`scripts/standard/`・`.claude/` を標準オーナーのチームに割り当てる（雛形の `.github/CODEOWNERS.example`）
 - 既定のブランチをブランチ保護し、CODEOWNERS のレビューを必須にする。統合ブランチのマージは人が PR で行う
 - 対話で Claude Code を使うときは、Bash を確認なしで許す権限モード（`bypassPermissions` など）を使わない
 
@@ -182,6 +246,10 @@ devkit の人のコマンド（approve など）は、Claude Code の中から�
 | `AI のサンドボックスを使えません` | Linux なら `sudo apt-get install bubblewrap socat`。コンテナの中で回していて bubblewrap が動かないときは、ランナーを VM か実機で回す（`aiSandbox: "off"` は最後の手段） |
 | `保護されたファイルが、ランナーと人のコマンド以外から変わった` | `.devkit/reports/tamper-<時刻>.md` と `git diff` で何が変わったかを確かめる。正しい変更なら人がコミットし、そうでなければ `git checkout -- <ファイル>` で戻す。隔離の設定（`aiSandbox`・`isolation.mode`）を確かめてから `pnpm devkit run` |
 | `devkit のコマンドの記録と合わない未コミットの変更があります` | 上と同じ。人が手で `.devkit/` や `docs/decisions.md` を編集した場合も出る（人の判断は devkit のコマンドで残す） |
+| `devkit のコマンドとランナーが書いたものではない内容の記録があります（コミット済みのものも含む）` | `git log -p -- <ファイル>` でだれが何を変えたかを確かめる。改ざんなら `git revert` などで戻す。正しい内容（人が手で直した上限など）なら、標準オーナーが端末で `pnpm devkit seal accept --role 技術 --note "<確かめたこと>"` |
+| Supervisor が `limit_stop`・`env_stop`・`policy_stop` | `pnpm devkit supervisor status` で理由を見る。原因（上限・ログイン切れ・環境・記録の不整合）を直してから、標準オーナーが端末で `pnpm devkit supervisor clear --role 技術 --note "<直したこと>"` |
+| Supervisor が判断の後に再開しない | `pnpm devkit supervisor status` の「次の照合での判断」を見る（一時停止中・時間帯の外・再試行の待ち・計画の承認待ち・作業がない、など）。手動停止（`manual_stop`）なら解除が要る |
+| ブリーフィングが届かない | `pnpm devkit supervisor status` の配信の状況。`no_target` は送り先の環境変数がない（`DEVKIT_NOTIFY_CMD`）。`failed` でも `.devkit/briefings/` に保存されている |
 | `Claude Code の中からは実行できません` | 人のコマンドは Claude Code の外の端末で実行する（Claude Code の `!` や、Claude Code から開いた端末も断る） |
 | `開始時点のコードで検証が通りません` | 統合ブランチで `pnpm verify` を手で実行して直す（雛形・環境・ブラウザ） |
 | `別のランナーが実行中です` | 二重起動の防止。落ちたランナーのロックは、プロセスがなく、ハートビートが途絶えていれば次の起動で外れる |

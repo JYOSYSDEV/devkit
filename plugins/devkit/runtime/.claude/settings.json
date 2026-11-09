@@ -38,7 +38,12 @@
       "Bash(pnpm standard:check*)",
       "Bash(pnpm standard:release*)",
       "Bash(pnpm -s devkit status*)",
-      "Bash(pnpm devkit status*)"
+      "Bash(pnpm devkit status*)",
+      "Bash(pnpm -s devkit briefing --print*)",
+      "Bash(pnpm devkit briefing --print*)",
+      "Bash(pnpm devkit supervisor status*)",
+      "Bash(pnpm -s devkit supervisor status*)",
+      "Bash(pnpm devkit seal status*)"
     ],
     "ask": [
       "Bash(node scripts/devkit/devkit.mjs approve*)",
@@ -65,7 +70,10 @@
       "Bash(pnpm devkit answer*)",
       "Bash(pnpm devkit proposal accept*)",
       "Bash(pnpm devkit proposal reject*)",
-      "Bash(pnpm devkit archive*)"
+      "Bash(pnpm devkit archive*)",
+      "Bash(pnpm devkit supervisor run*)",
+      "Bash(pnpm devkit supervisor start*)",
+      "Bash(pnpm devkit supervisor stop*)"
     ],
     "deny": [
       "Read(./.env)",
@@ -108,7 +116,9 @@
       "Bash(* devkit proposal accept*)",
       "Bash(* devkit proposal reject*)",
       "Bash(* devkit exception add*)",
-      "Bash(* --add-cycles*)"
+      "Bash(* --add-cycles*)",
+      "Bash(* devkit seal accept*)",
+      "Bash(* devkit supervisor clear*)"
     ]
   },
   "hooks": {
@@ -119,7 +129,10 @@
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PROJECT_DIR}/scripts/devkit/devkit.mjs", "brief"],
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/scripts/devkit/devkit.mjs",
+              "brief"
+            ],
             "timeout": 15
           }
         ]
@@ -132,7 +145,9 @@
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-edits.mjs"],
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-edits.mjs"
+            ],
             "timeout": 10
           }
         ]
@@ -143,7 +158,9 @@
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-bash.mjs"],
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-bash.mjs"
+            ],
             "timeout": 10
           }
         ]
@@ -154,7 +171,9 @@
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-read.mjs"],
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-read.mjs"
+            ],
             "timeout": 10
           }
         ]
@@ -167,7 +186,9 @@
           {
             "type": "command",
             "command": "node",
-            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/format-file.mjs"],
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/format-file.mjs"
+            ],
             "timeout": 30
           }
         ]

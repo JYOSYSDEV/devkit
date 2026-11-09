@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync
 import { hostname } from "node:os";
 import { ROLE_PERSON } from "../shared.mjs";
 import { decide, loadControls, loadGraph, loadState, planApproved } from "./model.mjs";
+import { readSupervisorState, SUPERVISOR_STOPS } from "./supstate.mjs";
 import { localTime, nowIso, readJson, writeJson } from "./util.mjs";
 
 export const HEARTBEAT_MS = 30_000;
@@ -145,7 +146,10 @@ export function computeStatus(ctx) {
   else if (s.outer === "stalled" || s.outer === "paused") whoseTurn = `${ROLE_PERSON.technical}（停止の理由を確かめて再開）`;
   else if (s.outer === "running") whoseTurn = "AI（ランナーの起動待ち: pnpm devkit run）";
   else whoseTurn = "AI（計画の作成中）";
-  return { hasPlan: true, mission: g.mission, outer: s.outer, reason: s.reason, cycle: s.cycle, plan, runner, counts, nodes, milestones, current: d.current, ready: d.ready.map((n) => n.id), waitingFor, whoseTurn, usage: s.usage, updatedAt: s.updatedAt };
+  const sv = readSupervisorState(ctx);
+  const supervisor = { alive: Boolean(sv.heartbeatAt) && Date.now() - Date.parse(sv.heartbeatAt) < 5 * 60_000, status: sv.status, reason: sv.reason, retry: sv.current, stopped: SUPERVISOR_STOPS.includes(sv.status), briefing: sv.briefing?.file ?? null };
+  if (supervisor.stopped && !waitingFor.length) whoseTurn = `${ROLE_PERSON.technical}（Supervisor の停止の理由を確かめて pnpm devkit supervisor clear）`;
+  return { hasPlan: true, mission: g.mission, outer: s.outer, reason: s.reason, cycle: s.cycle, plan, runner, supervisor, counts, nodes, milestones, current: d.current, ready: d.ready.map((n) => n.id), waitingFor, whoseTurn, usage: s.usage, updatedAt: s.updatedAt };
 }
 
 function pick(ns = {}) {
@@ -172,6 +176,9 @@ export function statusText(st) {
   } else if (r.run?.endedAt) {
     lines.push(`ランナー: 停止中（前回 ${localTime(r.run.endedAt)} に終了: ${r.run.stopReason ?? ""}）`);
   } else lines.push("ランナー: 停止中");
+  const sv = st.supervisor;
+  if (sv && (sv.alive || sv.status !== "stopped"))
+    lines.push(`Supervisor: ${sv.alive ? "動いている" : "動いていない"}（${sv.status}${sv.reason ? `: ${sv.reason}` : ""}）${sv.retry?.nextAt ? `／次の再試行 ${localTime(sv.retry.nextAt)}` : ""}${sv.briefing ? `／最後のブリーフィング ${sv.briefing}` : ""}`);
   lines.push(`ミッション: ${st.mission} ／ 状態: ${OUTER_JA[st.outer] ?? st.outer}${st.reason ? `（${st.reason}）` : ""}`);
   lines.push(`ノード: 完了 ${st.counts.done} / 全 ${st.nodes.length}${st.counts.failed + st.counts.blocked ? `、停止・要再計画 ${st.counts.failed + st.counts.blocked}` : ""}`);
   lines.push(`マイルストーン: ${st.milestones.map((m) => `${m.id}${m.release ? "（リリース）" : ""} ${MS_JA[m.status] ?? m.status}`).join(" → ")}`);

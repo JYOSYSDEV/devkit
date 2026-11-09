@@ -153,6 +153,7 @@ claude -p "<今回の作業の中身>" --agent devkit:<役割> --output-format s
 - 作業ディレクトリ（実装）と取り出し（レビュー・再計画・最終レビュー）は、リポジトリの外の作業場所（既定 `~/.cache/devkit/<案件>/work`、`.devkit/config.json` の `workDir`）に作ります。
 - `--settings` で、本体のリポジトリの `.claude/hooks/` のガード（作業ディレクトリの写しではない）と、Claude Code のサンドボックス（`aiSandbox: required` のとき。`failIfUnavailable`・`allowUnsandboxedCommands: false`・ネットワークなし）を渡します。作業ディレクトリの写しのプロジェクト設定は読みません（`--setting-sources user`）。
 - 環境変数 `DEVKIT_ROLE`（implementer / reviewer / final-reviewer / replanner）で、ガードが役割ごとの制限をかけます（レビュー・再計画は読み取り専用、実装は保護パス・ブランチ操作・devkit の状態の変更を禁止）。
+- Supervisor（`pnpm devkit supervisor run`、ADR-0006）は、ランナーの外側で「今ランナーを1つ起動してよいか」だけを決めます。人の判断を `controls.json` の変更の通知と定期の照合で検知し、判断を反映した写しの状態で実行できる作業があるときだけ、`--max-parallel 1` でランナーを起動します。終了の理由を分類して、一時的な障害は待って再試行、利用上限は復帰の時刻まで待ち、認証・環境・記録の不整合では止まります。管理情報は `.devkit/cache/supervisor/`（手元だけ。承認の台帳にはしない）。毎朝の定時ブリーフィング（`lib/briefing.mjs`）も Supervisor が作り、送信待ちから配信します。成果は `state.json` から、運用の出来事は `.devkit/events.jsonl` から集めます。
 - 実装担当には `DEVKIT_WORKDIR`（作業ディレクトリ）も渡します。サンドボックスは Bash にしか効かないので、Edit・Write の書き込み先はガード（guard-edits）が作業ディレクトリの中に限ります（`..`・絶対パス・`~`・途中のリンク・ハードリンク・`.git` の中は不可）。Bash の書き込み先（リダイレクト・`cp` など・git の出力先）も同じに判定します。権限のルールでも、本体のリポジトリと Claude Code・シェル・git・SSH の設定への Edit を断ります。
 - `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` を作業の制限時間に合わせます（`claude -p` は、既定では10分でバックグラウンドの待ちを打ち切るため）。
 - 制限時間を超えたら、プロセスグループに SIGINT → SIGTERM → SIGKILL を送り、出力が閉じなくても戻ります。

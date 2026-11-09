@@ -53,7 +53,7 @@ const ROOT = WORK ?? repo?.root ?? cwd;
 const isWorker = Boolean(ROLE) || WORKER_AGENTS.has(String(input.agent_type ?? "")) || (isNestedWorktree(repo) && !process.env.DEVKIT_MAIN_SESSION);
 
 const HUMAN_MSG =
-  "承認・差し戻し・回答・再計画の案の承認・標準の例外・上限の追加・判断の記録は、人が Claude Code の外の端末で行う。Claude からは実行しない。利用者に、端末で `pnpm devkit <コマンド>` を実行するよう伝える。";
+  "承認・差し戻し・回答・再計画の案の承認・標準の例外・上限の追加・判断の記録・記録の受け入れ（seal accept）・Supervisor の停止の解除（supervisor clear）は、人が Claude Code の外の端末で行う。Claude からは実行しない。利用者に、端末で `pnpm devkit <コマンド>` を実行するよう伝える。";
 
 // ---- 0. 全体に対する確認 ----
 
@@ -65,11 +65,12 @@ const HUMAN_MSG =
 
 // 人のための抜け道・Claude Code の中であることを隠す操作
 if (/\bDEVKIT_HUMAN_\w*/.test(command)) block("DEVKIT_HUMAN_* は人が端末で使うための設定。Claude のコマンドでは使わない。");
+if (/\bDEVKIT_(NOW|TEST_\w*)\b/.test(command)) block("DEVKIT_NOW・DEVKIT_TEST_* は devkit の試験のための設定。Claude のコマンドでは使わない（時計をずらすと、待ち・上限・締切を飛ばせるため）。");
 if (/\b(?:unset|export\s+-n)\s+[^;&|\n]*\bCLAUDE/.test(command) || /\benv\b[^;&|\n]*\s(?:-u\s*|--unset[= ])CLAUDE/.test(command) || /(^|[\s;&|(])CLAUDE(?:CODE|_CODE_\w+)=/.test(command))
   block("Claude Code の環境変数（CLAUDECODE など）を消したり書き換えたりしない。");
 if (/\benv\s+(?:-[a-zA-Z]*i\b|--ignore-environment\b|-\s)/.test(command)) block("env -i（環境変数をすべて消す）は使わない。");
 const mentionsDevkit = /\bdevkit(\.mjs)?\b/.test(command);
-const humanWord = /\b(approve|reject|answer|record|accept|exception|add-cycles)\b/.test(command);
+const humanWord = /\b(approve|reject|answer|record|accept|exception|add-cycles|clear)\b/.test(command);
 if (mentionsDevkit && /(^|[;&|(]|\n)\s*(sudo\s+)?(setsid|disown|nohup|tmux|screen|at|batch|systemd-run|daemonize|start-stop-daemon|launchctl|crontab)\b/.test(command))
   block("devkit のコマンドを、端末から切り離して（setsid・nohup・tmux・at など）実行しない。");
 // 中身が見えない実行（シェル・インタプリタへのパイプ、ヒアドキュメント、source）で人のコマンドを呼ばない
@@ -367,6 +368,8 @@ function humanSub(rest) {
   if (HUMAN_SUB.test(sub)) return sub;
   if (sub === "proposal" && /^(accept|reject)$/.test(sub2 ?? "")) return `proposal ${sub2}`;
   if (sub === "exception" && sub2 === "add") return "exception add";
+  if (sub === "seal" && sub2 === "accept") return "seal accept";
+  if (sub === "supervisor" && sub2 === "clear") return "supervisor clear";
   if (sub === "resume" && r.some((x) => x === "--add-cycles" || x.startsWith("--add-cycles="))) return "resume --add-cycles";
   return null;
 }
@@ -396,7 +399,7 @@ function devkitInvocation(argv) {
 // インタプリタに渡したコード（node -e・python -c など）: 人のコマンドと、状態ファイルへの書き込みを文字列で探す
 const CODE_WRITES = /write|append|rename|copy|unlink|\brm|open\s*\([^)]*["'][wax+]|truncate|symlink|>/;
 function codeScan(code) {
-  if (/devkit(\.mjs)?["'`]?[\s,'"`]+(?:["'`]?--["'`]?[\s,]+)?["'`]?(approve|reject|answer|record|proposal|exception)\b/.test(code) || /add-cycles/.test(code)) block(HUMAN_MSG);
+  if (/devkit(\.mjs)?["'`]?[\s,'"`]+(?:["'`]?--["'`]?[\s,]+)?["'`]?(approve|reject|answer|record|proposal|exception|seal["'`]?[\s,]+["'`]?accept|supervisor["'`]?[\s,]+["'`]?clear)\b/.test(code) || /add-cycles/.test(code)) block(HUMAN_MSG);
   if (/(controls|state|config|run)\.json|journal\.jsonl|decisions\.md|exceptions\.json/.test(code) && /\.devkit|decisions|exceptions/.test(code) && CODE_WRITES.test(code))
     block("インタプリタのコードから devkit が管理するファイルを書き換えない。");
   if (/\.git[\\/](config|hooks)|docs[\\/]standard|scripts[\\/](devkit|standard)/.test(code) && CODE_WRITES.test(code)) block("インタプリタのコードから .git の中・社内標準・devkit 自身を書き換えない。");
@@ -514,7 +517,7 @@ function relOf(dir, target, { asDir = false } = {}) {
     // 展開できない変数: 保護されたファイルの名前や場所（.devkit・.git・docs/standard など）を含むなら、保護されたものとして扱う
     const hit = PROBES.find((p) => t.endsWith(`/${p}`) || t.endsWith(p));
     if (hit) return hit;
-    const base = PROBES.find((p) => t.endsWith(`/${basename(p)}`) && !/\/x\.json$|\/pre-commit$|\/config$/.test(p));
+    const base = PROBES.find((p) => t.endsWith(`/${basename(p)}`) && !/\/x\.(json|md)$|\/pre-commit$|\/config$/.test(p));
     if (base) return base;
     if (/(^|\/)(\.devkit|\.git)(\/|$)|(^|\/)(docs\/(standard|decisions\.md|exceptions\.json)|scripts\/(devkit|standard))(\/|$)/.test(t)) return ".devkit/state.json";
     return null;
@@ -529,7 +532,7 @@ function relOf(dir, target, { asDir = false } = {}) {
 }
 
 // glob の書き方（.devkit/c*.json など）は、保護されたファイルに当たりうるかで判定する
-const PROBES = [".devkit/state.json", ".devkit/controls.json", ".devkit/config.json", ".devkit/journal.jsonl", ".devkit/run.json", ".devkit/version.json", ".devkit/evidence/x.json", "docs/decisions.md", "docs/exceptions.json", ".git/config", ".git/hooks/pre-commit"];
+const PROBES = [".devkit/state.json", ".devkit/controls.json", ".devkit/config.json", ".devkit/journal.jsonl", ".devkit/events.jsonl", ".devkit/run.json", ".devkit/version.json", ".devkit/evidence/x.json", ".devkit/briefings/x.md", ".devkit/cache/supervisor/state.json", "docs/decisions.md", "docs/exceptions.json", ".git/config", ".git/hooks/pre-commit"];
 function protectedTarget(rel) {
   if (!rel) return false;
   if (/[*?[{]/.test(rel)) {
@@ -700,7 +703,7 @@ function check(text, dir, depth) {
     if (viaXargs && inv) block(`${HUMAN_MSG}（xargs から devkit を呼ばない）`);
     if (/\$\(|`/.test(argv[0]) && /\bdevkit\b/.test(s0) && /\b(approve|reject|answer|record|proposal|exception|add-cycles)\b/.test(s0)) block(HUMAN_MSG);
     // ランナーが起動した AI は devkit の状態を変えない（結果は構造化出力で返す）
-    if (ROLE && inv && /^__devkit__ (start|pause|resume|run|approve|reject|answer|proposal|archive|log|exception|record)\b/.test(inv))
+    if (ROLE && inv && /^__devkit__ (start|pause|resume|run|approve|reject|answer|proposal|archive|log|exception|record|seal|briefing|supervisor)\b/.test(inv))
       block("ランナーが起動した AI は devkit のコマンドで状態を変えない。結果は構造化出力で報告する。");
 
     // ファイルを書き換えるコマンドの対象

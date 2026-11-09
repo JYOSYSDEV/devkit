@@ -1,7 +1,7 @@
 ---
 name: devkit-run
-description: devkit の計画を実行するランナーを起動・見守り・止めるときに使う。計画の承認と開始のあと、「始めて」「続けて」「再開して」「夜のあいだ回して」「止めて」と言われたとき、ランナーが止まっていて続きがあるときに使う。
-argument-hint: "[attended | night | stop]"
+description: devkit の計画を実行するランナーと Supervisor を起動・見守り・止めるときに使う。計画の承認と開始のあと、「始めて」「続けて」「再開して」「夜のあいだ回して」「判断したら自動で続けて」「毎朝まとめを送って」「止めて」と言われたとき、ランナーが止まっていて続きがあるときに使う。
+argument-hint: "[attended | night | supervise | stop]"
 ---
 
 # devkit-run: ランナーを動かす
@@ -36,11 +36,23 @@ pnpm devkit run --until 07:00 --detach
 - 止まったときの通知を受け取るには、`DEVKIT_NOTIFY_CMD`（共通）、`DEVKIT_NOTIFY_BUSINESS_CMD`（業務）、`DEVKIT_NOTIFY_TECH_CMD`（技術）を設定しておく（Slack なら `node scripts/devkit/notify-slack.mjs`）。
 - 朝は `pnpm devkit status` と、`.devkit/reports/` の実行のまとめを見る。状況ページは `.devkit/status.html`。
 
+**判断の後も自動で続ける・毎朝まとめを送る（supervise）**: Supervisor を常駐させる（ADR-0006）。人が承認・回答すると、Supervisor が条件を確かめてランナーを起動し、一時的な障害は待って再試行し、毎朝 08:00（`briefing.time`）に「夜間の成果・今朝の判断・判断後に進む作業・運用状態」を1通にまとめて送る。
+
+```bash
+pnpm devkit supervisor start     # 切り離して起動（常時動かすなら OS のサービスに登録: docs/rollout.md の 5b）
+pnpm devkit supervisor status    # 状態と「次の照合での判断」
+pnpm devkit briefing --print     # 今朝のブリーフィングを表示（--partial で前回の締切から今まで）
+```
+
+- Supervisor の起動は利用者に確認してから（常駐するプロセスになる）。常時動かすのは、OS のサービス（systemd・launchd）として登録するよう管理者に案内する。
+- Supervisor が止まった（`limit_stop`・`env_stop`・`policy_stop`・`manual_stop`）ときの解除は、原因を直してから標準オーナーが端末で `pnpm devkit supervisor clear --role 技術 --note "…"`（Claude からは実行できない）。
+- Supervisor は API の課金に切り替わる設定（`ANTHROPIC_API_KEY` など）をランナーに渡さない（`.devkit/config.json` の `supervisor.allowApiKey` を人が変えた場合を除く）。
+
 ランナーが起動する AI の権限は `.devkit/config.json` の `permissionMode`（既定 `dontAsk`: 許可していない操作は確認を待たずに拒否する）で決まります。ランナーは、Docker か Podman（検証の隔離。`isolation`）と、Linux では bubblewrap と socat（AI のサンドボックス。`aiSandbox`）がないと起動しません。足りないと言われたら、管理者の手順（docs/rollout.md の「隔離」）を案内します。`.devkit/config.json` は人が手で変えるファイルで、Claude は編集しません。
 
 ## 止めるとき
 
-`pnpm devkit pause <理由>`（Claude から実行してよい）。ランナーは実行中の作業が終わり次第止まる。再開は `pnpm devkit resume`。急ぐときは、ランナーのプロセスに SIGINT（Ctrl+C）を送る。次の起動で、中断した作業を照合してから続ける（途中のマージは取り消してやり直し、途中の作業は同じブランチの続きから）。
+`pnpm devkit pause <理由>`（Claude から実行してよい）。ランナーは実行中の作業が終わり次第止まる。再開は `pnpm devkit resume`。Supervisor の自動の起動も止めるなら `pnpm devkit supervisor stop <理由>`（ブリーフィングは続く。解除は標準オーナーの `supervisor clear`）。急ぐときは、ランナーのプロセスに SIGINT（Ctrl+C）を送る。次の起動で、中断した作業を照合してから続ける（途中のマージは取り消してやり直し、途中の作業は同じブランチの続きから）。
 
 ## 止まったときの案内
 
@@ -52,10 +64,12 @@ pnpm devkit run --until 07:00 --detach
 | 停止（進捗なし・再計画の上限） | 原因の調査を提案する（`devkit-diagnose`）。計画を直すなら kickoff の手順で直し、人がもう一度承認する |
 | 環境の問題（ログイン切れ・ネットワーク・コンテナのエンジン・サンドボックス） | 対処してから `pnpm devkit run`（試行回数には数えない） |
 | 保護されたファイルの変更を検出（改ざん） | `.devkit/reports/tamper-<時刻>.md` を利用者と見る。Claude は戻したりコミットしたりせず、人が `git diff` で確かめて片付けてから `pnpm devkit run` |
+| 記録が devkit の書いたものと合わない（コミット済みのものも） | `git log -p -- <ファイル>` を利用者と見る。改ざんなら人が戻す。正しい内容なら標準オーナーが端末で `pnpm devkit seal accept --role 技術 --note "…"` |
 | 計画が承認の後に変わった | 誰が何を変えたか（`git log .devkit/graph.json`）。人が確かめて承認し直す |
 
 ## してはいけないこと
 
 - ランナーの実行中に、このセッションで計画・テスト・設定ファイルを変更する
-- 人の判断（approve・reject・answer・proposal accept・resume --add-cycles）を代わりに実行する（フックとコマンド自身が止める）
+- 人の判断（approve・reject・answer・proposal accept・resume --add-cycles・seal accept・supervisor clear）を代わりに実行する（フックとコマンド自身が止める）
+- `.devkit/config.json`（Supervisor・ブリーフィングの設定を含む）を編集する（人が変える）
 - ランナーを使わずに、自分で作業を実装して「完了」にする（完了はランナーの検証だけが決める）

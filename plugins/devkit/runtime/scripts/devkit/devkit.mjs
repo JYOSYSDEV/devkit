@@ -14,6 +14,8 @@
 //   pnpm devkit mermaid [--write]     依存グラフ（--write で .devkit/graph.md）
 //   pnpm devkit goal <ノード>          ノードの /goal 条件文（手作業で進めるとき）
 //   pnpm devkit shared / version / brief
+//   pnpm devkit briefing [--print] [--json] [--partial] [--send] [--at <ISO>]   定時ブリーフィング（前回の締切から今回の締切まで）
+//   pnpm devkit supervisor run [--once] | start | status [--json] | stop [理由]   ランナーの外側で起動・待機・再試行を管理する
 //
 // 人だけが端末で実行するもの（Claude とランナーの AI からは実行できない）
 //   pnpm devkit approve plan --role <業務|技術> [--by 名前] [--note ...]
@@ -25,14 +27,18 @@
 //   pnpm devkit exception add --rules <ID,…> --subject <対象> --reason … --adr <パス> --review-by YYYY-MM-DD --role 技術
 //   pnpm devkit resume [--add-cycles N]
 //   pnpm devkit record --role <業務|技術> --target <対象> --decision <判断> [--note …]   判断の記録に1行残す（devkit の更新など）
+//   pnpm devkit supervisor clear --role 技術 --note "<直したこと>"   Supervisor の上限停止・環境の停止・方針違反・手動停止を解除する
+//   pnpm devkit seal accept --role 技術 --note "<確かめたこと>"   devkit が書いたものと合わない記録を、確かめた上で受け入れる
 //   pnpm devkit archive
 //   いずれも代理なら --delegate-of <本人> --note <理由>
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, renameSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildBriefing, flushOutbox, produceBriefing, writeBriefing } from "./lib/briefing.mjs";
+import { now as clockNow } from "./lib/clock.mjs";
 import { checkOwner, commitPaths, identity, recordDecision, requireHuman } from "./lib/human.mjs";
-import { journalWrite } from "./lib/seal.mjs";
+import { committedUnexplained, journal, journalProblem, journalWrite, uncommittedUnexplained, updateAnchor } from "./lib/seal.mjs";
 import {
   applyHumanDecisions,
   classifyPlanChange,
@@ -43,6 +49,7 @@ import {
   loadControls,
   loadGraph,
   loadState,
+  nodeKey,
   normalizeGraph,
   PLAN_APPROVERS,
   pendingRoles,
@@ -59,6 +66,9 @@ import {
   validate,
 } from "./lib/model.mjs";
 import { summarizeLogs, writeGateReport, writeStatusHtml } from "./lib/report.mjs";
+import { outboxEntries } from "./lib/briefing.mjs";
+import { Supervisor, supervisorAlive } from "./lib/supervisor.mjs";
+import { readSupervisorState, SUPERVISOR_STOPS } from "./lib/supstate.mjs";
 import { parseRunLimits, run } from "./lib/runner.mjs";
 import { appendProgress, computeStatus, runnerAlive, statusText } from "./lib/status.mjs";
 import { DevkitError, fail, localStamp, nowIso, parseArgs, readJson, sleep, writeJson, writeText } from "./lib/util.mjs";
@@ -68,9 +78,9 @@ import { DEVKIT_VERSION } from "./version.mjs";
 
 const ctx = createContext(process.cwd());
 const [cmd = "status", ...rest] = process.argv.slice(2);
-const { pos, opts } = parseArgs(rest, { booleans: ["json", "watch", "write", "before", "force", "detach", "release"] });
+const { pos, opts } = parseArgs(rest, { booleans: ["json", "watch", "write", "before", "force", "detach", "release", "print", "send", "partial", "once"] });
 
-const MUTATING = new Set(["start", "pause", "resume", "run", "approve", "reject", "answer", "proposal", "archive", "log", "exception", "record"]);
+const MUTATING = new Set(["start", "pause", "resume", "run", "approve", "reject", "answer", "proposal", "archive", "log", "exception", "record", "seal", "briefing", "supervisor"]);
 
 function out(text) {
   console.log(text);
@@ -212,6 +222,28 @@ const commands = {
     appendProgress(ctx, pos.join(" "));
   },
 
+  // 定時ブリーフィング。--print・--json は表示だけ（ファイルを書かない）。--send は保存して送信待ちに入れ、送る
+  async briefing() {
+    const at = typeof opts.at === "string" ? new Date(opts.at) : clockNow();
+    if (!Number.isFinite(at.getTime())) fail("--at は ISO 8601 の日時で指定してください");
+    if (opts.print || opts.json) {
+      const b = buildBriefing(ctx, { at, partial: Boolean(opts.partial) });
+      if (opts.json) return out(JSON.stringify(b, null, 2));
+      return out(b.text);
+    }
+    if (opts.partial) {
+      const b = buildBriefing(ctx, { at, partial: true });
+      return out(`途中経過を保存しました: ${writeBriefing(ctx, b)}`);
+    }
+    const r = produceBriefing(ctx, { at });
+    out(`${r.created ? "作りました" : "この締切の分は作成済みです"}: ${r.file}（${r.briefing.subject}）`);
+    if (opts.send) {
+      const sent = await flushOutbox(ctx);
+      for (const e of sent) out(`配信: ${e.status}${e.lastError ? `（${e.lastError}）` : ""}`);
+      if (!sent.length) out(`配信: ${r.entry.status}${r.entry.lastError ? `（${r.entry.lastError}）` : ""}`);
+    }
+  },
+
   start() {
     const g = loadGraph(ctx);
     const c = loadControls(ctx);
@@ -308,7 +340,7 @@ const commands = {
   async run() {
     if (ctx.inWorker) fail("ランナーはメインの作業ツリーで起動します");
     if (process.env.DEVKIT_ROLE) fail("ランナーが起動した AI からランナーは起動できません");
-    parseRunLimits({ until: opts.until, maxHours: opts["max-hours"], maxCostUsd: opts["max-cost-usd"] });
+    parseRunLimits({ until: opts.until, maxHours: opts["max-hours"], maxCostUsd: opts["max-cost-usd"], maxParallel: opts["max-parallel"] });
     if (opts.detach) {
       mkdirSync(ctx.logs, { recursive: true });
       const logFile = join(ctx.logs, `runner-${localStamp()}.log`);
@@ -319,7 +351,7 @@ const commands = {
       out(`ランナーを切り離して起動しました（pid ${child.pid}）。状況: pnpm devkit status ／ ログ: ${relative(ctx.root, logFile)}`);
       return;
     }
-    const code = await run(ctx, { until: opts.until, maxHours: opts["max-hours"], maxCostUsd: opts["max-cost-usd"] });
+    const code = await run(ctx, { until: opts.until, maxHours: opts["max-hours"], maxCostUsd: opts["max-cost-usd"], maxParallel: opts["max-parallel"] });
     process.exitCode = code;
   },
 
@@ -368,7 +400,8 @@ const commands = {
         ctx,
         (cc) => {
           cc.approvals[gateKey("before", n.id)] ??= {};
-          cc.approvals[gateKey("before", n.id)][r] = { by: who.name, email: who.email, at: nowIso(), note: note(opts), delegateOf: owner.delegateOf ?? null };
+          // ノードの定義に紐づける（再計画で定義が変わったら、承認は取り直しになる）
+          cc.approvals[gateKey("before", n.id)][r] = { sha: nodeKey(n), by: who.name, email: who.email, at: nowIso(), note: note(opts), delegateOf: owner.delegateOf ?? null };
         },
         { journal: "approve --before" },
       );
@@ -593,6 +626,106 @@ const commands = {
     recordDecision(ctx, { role: r, who, target: `標準の例外 ${id}（${rules.join(",")} / ${subject}）`, decision: "例外の承認", content: `${reason}（見直し ${reviewBy}、${adr}）`, delegateOf: owner.delegateOf, command: "exception add" });
     commitPaths(ctx, ["docs/exceptions.json", adr, "docs/decisions.md", ".devkit/journal.jsonl"], `devkit: 標準の例外 ${id} を承認`);
     out(`${id} を登録しました。pnpm standard:check で違反が消えたことを確かめてください`);
+  },
+
+  // Supervisor: ランナーの外側で、判断の後の自動の再開・障害の再試行・定時ブリーフィングを管理する
+  async supervisor() {
+    const [sub = "status"] = pos;
+    if (sub === "run") {
+      if (ctx.inWorker) fail("Supervisor はメインの作業ツリーで動かします");
+      const sv = new Supervisor(ctx, { once: Boolean(opts.once) });
+      await sv.loop();
+      return;
+    }
+    if (sub === "start") {
+      const a = supervisorAlive(ctx);
+      if (a.alive) return out(`Supervisor はすでに動いています（pid ${a.lock?.pid}）`);
+      mkdirSync(ctx.logs, { recursive: true });
+      const logFile = join(ctx.logs, `supervisor-${localStamp()}.log`);
+      const fd = openSync(logFile, "a");
+      const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "supervisor", "run"], { cwd: ctx.root, detached: true, stdio: ["ignore", fd, fd], env: { ...process.env } });
+      child.unref();
+      return out(`Supervisor を切り離して起動しました（pid ${child.pid}）。常時動かすなら OS のサービスとして登録します（docs/rollout.md）。ログ: ${relative(ctx.root, logFile)}`);
+    }
+    if (sub === "stop") {
+      const reason = pos.slice(1).join(" ") || "手動で停止";
+      updateControls(
+        ctx,
+        (c) => {
+          c.supervisor = { ...(c.supervisor ?? {}), stop: { reason, at: clockNow().toISOString() } };
+        },
+        { journal: "supervisor stop" },
+      );
+      if (!alive()) commitPaths(ctx, [".devkit/controls.json", ".devkit/journal.jsonl"], "devkit: Supervisor を手動で停止");
+      return out(`Supervisor の自動の起動を止めました（${reason}）。実行中のランナーは止まりません（止めるなら pnpm devkit pause）。ブリーフィングは続けます。解除は標準オーナーが端末で pnpm devkit supervisor clear --role 技術 --note "…"`);
+    }
+    if (sub === "clear") {
+      const r = role(opts);
+      if (r !== "technical") fail("Supervisor の停止の解除は標準オーナー（--role 技術）が行います");
+      const text = note(opts, true);
+      const st = readSupervisorState(ctx);
+      requireHuman("supervisor clear", { detail: `Supervisor の停止（${st.status}: ${st.reason || "—"}）を解除し、試行回数と今日の起動回数を数え直します` });
+      const who = identity(ctx, opts.by);
+      const owner = checkOwner(ctx, r, who, { delegateOf: opts["delegate-of"], note: text });
+      updateControls(
+        ctx,
+        (c) => {
+          c.supervisor = { stop: null, clear: { at: clockNow().toISOString(), by: who.name, email: who.email, note: text, from: st.status } };
+        },
+        { journal: "supervisor clear" },
+      );
+      recordDecision(ctx, { role: r, who, target: `Supervisor の停止の解除（${st.status}）`, decision: "解除", content: `${text}（停止の理由: ${st.reason || "—"}）`, delegateOf: owner.delegateOf, command: "supervisor clear" });
+      if (!alive()) commitPaths(ctx, [".devkit/controls.json", ".devkit/journal.jsonl", "docs/decisions.md"], "devkit: Supervisor の停止を解除");
+      return out("解除しました。Supervisor は次の照合で、起動してよいかを確かめ直します");
+    }
+    if (sub !== "status") fail("使い方: supervisor run [--once] | start | status [--json] | stop [理由] | clear --role 技術 --note …");
+    const st = readSupervisorState(ctx);
+    const svAlive = supervisorAlive(ctx);
+    const box = outboxEntries(ctx);
+    let next = null;
+    try {
+      const sv = new Supervisor(ctx, { log: () => {} });
+      sv.load();
+      sv.dryRun = true;
+      next = SUPERVISOR_STOPS.includes(st.status) ? null : sv.evaluate(clockNow());
+    } catch (e) {
+      next = { start: false, status: "error", reason: e.message };
+    }
+    const info = { alive: svAlive.alive, pid: svAlive.lock?.pid ?? null, status: st.status, reason: st.reason, since: st.since, retry: st.current, day: st.day, noProgress: st.noProgress, briefing: st.briefing, outbox: box.map((e) => ({ deadline: e.deadline, status: e.status, attempts: e.attempts, lastError: e.lastError })), next };
+    if (opts.json) return out(JSON.stringify(info, null, 2));
+    out(`Supervisor: ${svAlive.alive ? `動いている（pid ${svAlive.lock?.pid}）` : "動いていない"}／状態 ${st.status}${st.reason ? `: ${st.reason}` : ""}`);
+    if (st.current) out(`再試行: ${st.current.kind} ${st.current.attempt} 回目、${st.current.nextAt} に`);
+    out(`今日の自動起動: ${st.day?.runs ?? 0} 回／進捗なしで続いた起動: ${st.noProgress ?? 0} 回`);
+    if (st.briefing?.file) out(`最後のブリーフィング: ${st.briefing.file}`);
+    for (const e of box.slice(-3)) out(`配信 ${e.deadline}: ${e.status}${e.lastError ? `（${e.lastError}）` : ""}`);
+    if (next) out(`次の照合での判断: ${next.start ? `ランナーを起動する（${next.reason}）` : `${next.stop ?? next.status}: ${next.reason}`}`);
+    if (SUPERVISOR_STOPS.includes(st.status)) out("解除は、原因を直してから標準オーナーが端末で pnpm devkit supervisor clear --role 技術 --note \"…\"");
+  },
+
+  // 記録（state.json・controls.json・exceptions.json）が devkit のコマンドとランナーの書いたものか。
+  // seal accept: 標準オーナーが内容を確かめた上で受け入れる（journal に残し、判断の記録に書く）。人が端末で
+  seal() {
+    const [sub] = pos;
+    const prev = readJson(ctx.runFile, null);
+    const files = () => [...new Set([...(journalProblem(ctx) ? [".devkit/journal.jsonl"] : []), ...committedUnexplained(ctx, prev), ...uncommittedUnexplained(ctx, prev)])];
+    if (sub !== "accept") {
+      const bad = files();
+      const jp = journalProblem(ctx);
+      return out(bad.length ? `devkit のコマンドとランナーが書いたものと合わない記録: ${bad.join(", ")}${jp ? `（${jp}）` : ""}（git log -p で確かめ、正しければ標準オーナーが pnpm devkit seal accept --role 技術 --note "…"）` : "記録はすべて devkit のコマンドとランナーが書いたものです");
+    }
+    const r = role(opts);
+    if (r !== "technical") fail("記録の受け入れは標準オーナー（--role 技術）が行います");
+    const text = note(opts, true);
+    const bad = files();
+    if (!bad.length) return out("受け入れが要る記録はありません");
+    requireHuman("seal accept", { detail: `次の記録の今の内容を、正しいものとして受け入れます: ${bad.join(", ")}` });
+    const who = identity(ctx, opts.by);
+    const owner = checkOwner(ctx, r, who, { delegateOf: opts["delegate-of"], note: text });
+    updateAnchor(ctx, { force: true });
+    journal(ctx, "seal accept", bad.filter((f) => f !== ".devkit/journal.jsonl").concat([".devkit/state.json", ".devkit/controls.json"]).filter((f, i, a) => a.indexOf(f) === i));
+    recordDecision(ctx, { role: r, who, target: `記録の受け入れ（${bad.join(", ")}）`, decision: "受け入れ", content: text, delegateOf: owner.delegateOf, command: "seal accept" });
+    commitPaths(ctx, [...bad, ".devkit/journal.jsonl", "docs/decisions.md"], "devkit: 記録の受け入れ");
+    out(`受け入れました: ${bad.join(", ")}`);
   },
 
   // 判断の記録に1行残す（devkit の更新・手での運用の判断など）。人が端末で

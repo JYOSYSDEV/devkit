@@ -18,6 +18,7 @@ import {
   ROLE_PERSON,
   ROLES,
 } from "../shared.mjs";
+import { parseHHMM, validTimeZone } from "./clock.mjs";
 import { insideWorkBase, ISOLATION_DEFAULTS } from "./isolation.mjs";
 import { journalWrite } from "./seal.mjs";
 import { fail, globToRegExp, nowIso, ownsOverlap, readJson, sha256, staticPrefix, writeJson } from "./util.mjs";
@@ -183,6 +184,7 @@ export function loadControls(ctx) {
     proposals: {},
     pause: null,
     pendingReplan: null,
+    supervisor: null,
     ...c,
     plan: { approvedHash: null, approvals: {}, history: [], ...(c.plan ?? {}) },
   };
@@ -239,8 +241,34 @@ export function loadConfig(ctx) {
     ...file,
   };
   config.isolation = { ...ISOLATION_DEFAULTS, ...(file.isolation ?? {}) };
+  config.briefing = { ...BRIEFING_DEFAULTS, ...(file.briefing ?? {}) };
+  config.supervisor = {
+    ...SUPERVISOR_DEFAULTS,
+    ...(file.supervisor ?? {}),
+    retry: { ...SUPERVISOR_DEFAULTS.retry, ...(file.supervisor?.retry ?? {}) },
+    limits: { ...SUPERVISOR_DEFAULTS.limits, ...(file.supervisor?.limits ?? {}) },
+  };
   return config;
 }
+
+// 定時ブリーフィング（毎日 time に、前回の締切からの分をまとめて1通にする）
+export const BRIEFING_DEFAULTS = {
+  enabled: true,
+  time: "08:00",
+  timeZone: "Asia/Tokyo",
+  // 送り先: common（DEVKIT_NOTIFY_CMD。なければ技術・業務の送り先）・technical・business
+  to: "common",
+};
+
+// Supervisor（ランナーの外側で、起動・待機・再試行を管理する）
+export const SUPERVISOR_DEFAULTS = {
+  intervalSeconds: 20, // 判断の取りこぼしがないように、ファイルの変更の通知とは別に、この間隔で照合する
+  maxParallel: 1, // 自動で起動するランナーの AI の並列数（計画の maxParallel より小さければこちら）
+  hours: null, // 自動で起動してよい時間帯（例 "22:00-07:00"）。null なら終日
+  allowApiKey: false, // true でなければ、ANTHROPIC_API_KEY などの API の課金に切り替わる設定をランナーに渡さない
+  retry: { maxAttempts: 3, baseSeconds: 60, maxWaitMinutes: 30, totalHours: 6, maxRateLimitWaitHours: 8 },
+  limits: { maxRunsPerDay: 48, maxCostUsdPerDay: null, maxNoProgressRuns: 3 },
+};
 
 // 設定の値の確かめ（ランナーの起動前）
 export function configProblems(config) {
@@ -248,11 +276,49 @@ export function configProblems(config) {
   if (!["dontAsk", "auto"].includes(config.permissionMode)) p.push(`permissionMode は dontAsk か auto（${config.permissionMode} は使えない）`);
   if (!["required", "off"].includes(config.aiSandbox)) p.push(`aiSandbox は required か off（${config.aiSandbox}）`);
   if (!["container", "none"].includes(config.isolation.mode)) p.push(`isolation.mode は container か none（${config.isolation.mode}）`);
+  const b = config.briefing ?? BRIEFING_DEFAULTS;
+  if (!parseHHMM(b.time)) p.push(`briefing.time は HH:MM（${b.time}）`);
+  if (!validTimeZone(b.timeZone)) p.push(`briefing.timeZone は IANA のタイムゾーン名（例 Asia/Tokyo。${b.timeZone}）`);
+  if (!["common", "technical", "business"].includes(b.to)) p.push(`briefing.to は common・technical・business（${b.to}）`);
+  const sv = config.supervisor ?? SUPERVISOR_DEFAULTS;
+  const int = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
+  if (!int(sv.intervalSeconds, 5, 60)) p.push("supervisor.intervalSeconds は 5〜60 の整数（判断から1分以内に再開を判定する）");
+  if (!int(sv.maxParallel, 1, 8)) p.push("supervisor.maxParallel は 1〜8 の整数");
+  if (sv.hours !== null && !/^([01]?\d|2[0-3]):[0-5]\d-([01]?\d|2[0-3]):[0-5]\d$/.test(String(sv.hours))) p.push(`supervisor.hours は "22:00-07:00" の形か null（${sv.hours}）`);
+  if (!int(sv.retry.maxAttempts, 0, 10)) p.push("supervisor.retry.maxAttempts は 0〜10 の整数");
+  if (!int(sv.limits.maxRunsPerDay, 1, 500)) p.push("supervisor.limits.maxRunsPerDay は 1〜500 の整数");
+  if (sv.limits.maxCostUsdPerDay !== null && !(Number(sv.limits.maxCostUsdPerDay) > 0)) p.push("supervisor.limits.maxCostUsdPerDay は正の数か null");
   for (const k of ["installArgs", "verifyArgs"])
     if (!Array.isArray(config.isolation[k]) || config.isolation[k].some((a) => typeof a !== "string")) p.push(`isolation.${k} は文字列の配列`);
-  if (config.isolation.mode === "container" && config.isolation.verifyArgs.some((a) => /^--(network|net|privileged|cap-add|volume|mount|pid|ipc|userns|device|security-opt)\b|^-v$/.test(a)))
-    p.push("isolation.verifyArgs で、検証の段階のネットワーク・権限・マウントを広げることはできない");
+  if (config.isolation.mode === "container")
+    for (const k of ["installArgs", "verifyArgs"]) {
+      if (!Array.isArray(config.isolation[k])) continue;
+      const bad = containerArgProblems(config.isolation[k], { install: k === "installArgs" });
+      if (bad.length) p.push(`isolation.${k} に使えない指定がある（${bad.join("、")}）。使えるのは資源の上限・ラベル・KEY=値 の環境変数だけ${k === "installArgs" ? "（インストールの段階は --add-host・--dns も）" : ""}`);
+    }
   return p;
+}
+
+// 検証のコンテナに足せる指定（許可リスト）。ネットワーク・権限・マウント・利用者・読み取り専用の解除などは、どの書き方でも足せない
+const CONTAINER_VALUED = new Set(["--memory", "-m", "--memory-swap", "--memory-reservation", "--cpus", "--cpu-shares", "--cpuset-cpus", "--pids-limit", "--shm-size", "--ulimit", "--label", "-l", "--env", "-e", "--stop-timeout"]);
+const CONTAINER_INSTALL_VALUED = new Set(["--add-host", "--dns"]);
+export function containerArgProblems(list, { install = false } = {}) {
+  const bad = [];
+  for (let i = 0; i < list.length; i++) {
+    const raw = String(list[i]);
+    const eq = raw.startsWith("--") ? raw.indexOf("=") : -1;
+    const name = eq > 0 ? raw.slice(0, eq) : raw;
+    const ok = CONTAINER_VALUED.has(name) || (install && CONTAINER_INSTALL_VALUED.has(name));
+    if (!ok) {
+      bad.push(raw);
+      continue;
+    }
+    const value = eq > 0 ? raw.slice(eq + 1) : list[++i];
+    if (value === undefined || String(value).startsWith("-")) bad.push(`${name}（値がない）`);
+    // 環境変数は KEY=値 だけ（-e KEY でホストの値を渡さない）
+    else if ((name === "-e" || name === "--env") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(String(value))) bad.push(`${name} ${value}（KEY=値 で書く）`);
+  }
+  return bad;
 }
 
 // ---------- 仕様書 ----------
@@ -514,6 +580,11 @@ export function validate(ctx, g, { controls = null } = {}) {
 
 // ---------- 承認 ----------
 
+// ノードの定義のキー。着手前の承認はこれに紐づき、再計画で定義が変わったら取り直しになる
+export function nodeKey(n) {
+  return sha256(stable(n)).slice(0, 16);
+}
+
 export function gateKey(kind, id) {
   return kind === "before" ? `${id}:before` : id;
 }
@@ -690,9 +761,9 @@ export function decide(g, s, c) {
     if (!["pending", "active"].includes(ms.status)) continue;
     if (!depsDone(n)) continue;
     const beforeRoles = requiredRoles(c, gateKey("before", n.id), n.before);
-    const pend = pendingRoles(c, gateKey("before", n.id), beforeRoles);
+    const pend = pendingRoles(c, gateKey("before", n.id), beforeRoles, { sha: nodeKey(n) });
     if (pend.length) {
-      result.waiting.approvals.push({ target: n.id, kind: "before", roles: pend, sha: null });
+      result.waiting.approvals.push({ target: n.id, kind: "before", roles: pend, sha: nodeKey(n) });
       continue;
     }
     candidates.push(n);

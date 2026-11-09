@@ -1,6 +1,6 @@
 {
   "name": "devkit",
-  "version": "4.1.1",
+  "version": "4.3.0",
   "description": "社内標準に沿った開発キット。依頼から仕様・マイルストーン・作業の依存グラフを作り、ランナーが作業ごとに実装・機械検証・独立レビュー・統合を進める。人は業務ゲートと技術ゲートで判断する。夜間の無人実行と状態の確認に対応",
   "author": { "name": "社内標準オーナー" },
   "keywords": ["outer-loop", "runner", "autonomous-development", "standard", "governance", "nextjs"]

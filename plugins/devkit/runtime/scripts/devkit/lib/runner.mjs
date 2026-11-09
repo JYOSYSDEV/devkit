@@ -38,9 +38,10 @@ import {
   updateControls,
   validate,
 } from "./model.mjs";
+import { appendEvent } from "./events.mjs";
 import { notify } from "./notify.mjs";
 import { writeGateReport, writeRunReport, writeStatusHtml } from "./report.mjs";
-import { Seal, uncommittedUnexplained } from "./seal.mjs";
+import { committedUnexplained, journal, journalProblem, Seal, uncommittedUnexplained } from "./seal.mjs";
 import { acquireLock, appendProgress, RunInfo, releaseLock } from "./status.mjs";
 import { fail, localStamp, nowIso, readJson, readText, writeJson, writeText } from "./util.mjs";
 import {
@@ -69,11 +70,20 @@ export async function run(ctx, opts = {}) {
 
 // 停止条件の値（--until HH:MM、--max-hours、--max-cost-usd）。おかしな値は黙って無視せずに断る
 export function parseRunLimits(opts = {}) {
-  const out = { until: null, maxHours: null, maxCostUsd: null };
+  const out = { until: null, maxHours: null, maxCostUsd: null, maxParallel: null };
+  if (opts.maxParallel !== undefined && opts.maxParallel !== null && opts.maxParallel !== false) {
+    const n = Number(opts.maxParallel);
+    if (!Number.isInteger(n) || n < 1 || n > 8) fail(`--max-parallel は 1〜8 の整数で指定してください（${opts.maxParallel}）`);
+    out.maxParallel = n;
+  }
   if (opts.until !== undefined && opts.until !== null && opts.until !== false) {
-    const m = String(opts.until).match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
-    if (!m) fail(`--until は HH:MM（24時間制。例: 07:00）で指定してください（${opts.until}）`);
-    out.until = { h: Number(m[1]), m: Number(m[2]), text: String(opts.until) };
+    const text = String(opts.until);
+    const m = text.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+    // ISO 8601 の日時（Supervisor が、設定のタイムゾーンで求めた時間帯の終わりを渡す）
+    const abs = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text) ? Date.parse(text) : Number.NaN;
+    if (Number.isFinite(abs)) out.until = { at: abs, text };
+    else if (m) out.until = { h: Number(m[1]), m: Number(m[2]), text };
+    else fail(`--until は HH:MM（24時間制。例: 07:00）か ISO 8601 の日時で指定してください（${opts.until}）`);
   }
   for (const [k, name] of [
     ["maxHours", "--max-hours"],
@@ -153,6 +163,7 @@ class Runner {
       return fn(c);
     });
     this.seal.note(".devkit/controls.json");
+    this.info?.set({ sealed: this.seal.toJSON() });
     this.c = loadControls(this.ctx);
     return r;
   }
@@ -160,6 +171,8 @@ class Runner {
   commitState(message) {
     if (this.tampered) return;
     if (this.checkSeal()) return;
+    // コミットする状態ファイルの内容を journal に残す（コミット済みの内容が、ランナーの書いたものだと後から分かるように）
+    journal(this.ctx, "runner", [".devkit/state.json", ".devkit/controls.json"]);
     git(this.ctx.root, ["add", "-A", "--", ".devkit", "docs/decisions.md"]);
     const staged = git(this.ctx.root, ["diff", "--cached", "--name-only"]).out;
     if (staged) git(this.ctx.root, commitArgs(this.ctx.root, message));
@@ -211,6 +224,16 @@ class Runner {
       fail(
         `devkit のコマンドの記録と合わない未コミットの変更があります: ${unexplained.join(", ")}。git diff で内容を確かめ、正しければ人がコミットし、でなければ git checkout -- <ファイル> で戻してから起動してください`,
       );
+    const jp = journalProblem(ctx);
+    if (jp)
+      fail(`${jp}。git log -p -- .devkit/journal.jsonl で確かめ、巻き戻しが誤りなら戻してください。意図したものなら、標準オーナーが端末で pnpm devkit seal accept --role 技術 --note "<確かめたこと>" を実行します`, EXIT.tamper);
+    const committed = committedUnexplained(ctx, readJson(ctx.runFile, null));
+    if (committed.length)
+      fail(
+        `devkit のコマンドとランナーが書いたものではない内容の記録があります（コミット済みのものも含む）: ${committed.join(", ")}。` +
+          `git log -p -- ${committed[0]} で誰が何を変えたかを確かめ、改ざんなら戻してください。正しい内容なら、標準オーナーが端末で pnpm devkit seal accept --role 技術 --note "<確かめたこと>" を実行します`,
+        EXIT.tamper,
+      );
     if (!existsSync(ctx.checker)) fail("標準チェッカー（scripts/standard/check.mjs）がありません。/devkit:update で実行部品を入れ直してください");
     const sb = sandboxProblem(config);
     if (sb) fail(`AI のサンドボックスを使えません: ${sb}`);
@@ -246,13 +269,16 @@ class Runner {
       pre = this.preflight();
     } catch (e) {
       if (!this.opts.quiet) console.error(`[devkit run] ${e.message}`);
-      return e.code === EXIT.busy ? EXIT.busy : e.code === EXIT.env ? EXIT.env : EXIT.preflight;
+      const code = [EXIT.busy, EXIT.env, EXIT.tamper].includes(e.code) ? e.code : EXIT.preflight;
+      if (code !== EXIT.busy) appendEvent(this.ctx, "run_refused", { run: this.stamp, pid: process.pid, code, reason: String(e.message).slice(0, 2000) }, `run:${this.stamp}:${process.pid}:refused`);
+      return code;
     }
     if (pre === "done") {
       console.log("[devkit run] ミッションは完了しています");
       return EXIT.ok;
     }
     this.seal.start();
+    appendEvent(this.ctx, "run_started", { run: this.stamp, pid: process.pid, cycle: this.s.cycle, by: process.env.DEVKIT_SUPERVISOR ? "supervisor" : "human" }, `run:${this.stamp}:${process.pid}:start`);
     this.info = new RunInfo(this.ctx, { logDir: this.logDir, cycle: this.s.cycle, sealed: this.seal.toJSON() });
     this.info.start();
     mkdirSync(this.logDir, { recursive: true });
@@ -291,6 +317,12 @@ class Runner {
         }
         const report = writeRunReport(this.ctx, { startedAt: new Date(this.startedAt).toISOString(), stamp: this.stamp, stop: this.stop, events: this.events, usage: this.info.data.usage });
         this.info.stop(this.stop?.reason ?? "");
+        appendEvent(
+          this.ctx,
+          "run_ended",
+          { run: this.stamp, pid: process.pid, code: this.stop?.code ?? EXIT.ok, reason: String(this.stop?.reason ?? "").slice(0, 2000), report, costUsd: this.info.data.usage?.costUsd ?? 0, tamper: Boolean(this.tampered) },
+          `run:${this.stamp}:${process.pid}:end`,
+        );
         this.log(`ランナー終了: ${this.stop?.reason ?? ""}（まとめ: ${report}）`);
         try {
           writeStatusHtml(this.ctx);
@@ -424,7 +456,9 @@ class Runner {
   limitReached() {
     const { limits } = this;
     if (this.interrupted) return this.stop?.reason;
-    if (limits.until) {
+    if (limits.until?.at) {
+      if (Date.now() >= limits.until.at) return `終了時刻 ${limits.until.text} になった`;
+    } else if (limits.until) {
       const end = new Date(this.startedAt);
       end.setHours(limits.until.h, limits.until.m, 0, 0);
       if (end.getTime() <= this.startedAt) end.setDate(end.getDate() + 1);
@@ -485,7 +519,7 @@ class Runner {
         await this.notify("technical", `${this.s.reason}。続けるなら端末で pnpm devkit resume --add-cycles <N>`);
         return;
       }
-      await this.runCycle(d.ready);
+      await this.runCycle(this.limits.maxParallel ? d.ready.slice(0, this.limits.maxParallel) : d.ready);
     } else if (d.replan.length) {
       await this.replan(d.replan);
     } else if (d.waiting.approvals.length || d.waiting.answers.length || d.waiting.proposals.length) {
@@ -745,7 +779,7 @@ class Runner {
     // 依頼ごとに ID を付ける。回答はこの ID と依頼の種別（役割）に紐づけ、合わない回答は受け付けない
     ns.requestSeq = (ns.requestSeq ?? 0) + 1;
     const type = normalizeRole(raw.type) ?? "technical";
-    const request = { ...raw, type, id: `${n.id}-${ns.requestSeq}`, at: nowIso(), summary: summary ?? "" };
+    const request = { ...raw, type, id: `${n.id}-${ns.requestSeq}`, at: nowIso(), plan: this.c?.plan?.approvedHash ?? null, base: ns.base ?? null, summary: summary ?? "" };
     ns.request = request;
     const rid = requestId(n.id, request);
     const file = join(this.ctx.requests, `${n.id}.md`);
@@ -1049,7 +1083,7 @@ class Runner {
     const { ctx } = this;
     const roles = proposalRoles(reasons);
     writeJson(join(ctx.proposals, `${id}.json`), { id, milestone: mid, at: nowIso(), items, reasons, roles, proposal: p ?? null });
-    this.s.proposals = [...(this.s.proposals ?? []).filter((x) => x.id !== id), { id, milestone: mid, items, roles, status: "needs_human", reasons }];
+    this.s.proposals = [...(this.s.proposals ?? []).filter((x) => x.id !== id), { id, milestone: mid, items, roles, status: "needs_human", reasons, at: nowIso() }];
     this.log(`再計画の案 ${id} は人の確認が要る: ${reasons.slice(0, 3).join(" / ")}`);
     this.save();
     this.commitState(`devkit: 再計画の案 ${id}（人の確認待ち）`);

@@ -12,8 +12,9 @@ export function notifyTarget(role) {
 }
 
 // 失敗しても本体は止めない。結果（送れた・送れなかった）を返す
-export function notify({ role = null, message, project = "", onResult = () => {} }) {
-  const cmd = notifyTarget(role);
+// subject・file: 定時ブリーフィングのように長いものは、件名と本文のファイルも渡す（DEVKIT_SUBJECT・DEVKIT_MESSAGE_FILE）
+export function notify({ role = null, message, project = "", subject = "", file = "", target = undefined, onResult = () => {} }) {
+  const cmd = target === undefined ? notifyTarget(role) : target;
   if (!cmd) return Promise.resolve({ sent: false, reason: "送り先が設定されていない" });
   const text = `${role ? `[${ROLE_LABEL[role]}の判断] ` : ""}${project ? `${project}: ` : ""}${message}`;
   return new Promise((resolvePromise) => {
@@ -28,7 +29,7 @@ export function notify({ role = null, message, project = "", onResult = () => {}
       const child = spawn(cmd, {
         shell: true,
         stdio: "ignore",
-        env: { ...process.env, DEVKIT_MESSAGE: text, DEVKIT_ROLE_TARGET: role ?? "" },
+        env: { ...process.env, DEVKIT_MESSAGE: text, DEVKIT_ROLE_TARGET: role ?? "", DEVKIT_SUBJECT: subject, DEVKIT_MESSAGE_FILE: file },
       });
       const timer = setTimeout(() => {
         child.kill("SIGTERM");
@@ -46,4 +47,11 @@ export function notify({ role = null, message, project = "", onResult = () => {}
       end({ sent: false, reason: e.message });
     }
   });
+}
+
+// 定時ブリーフィングの送り先（common なら共通。なければ技術・業務の順）
+export function briefingTarget(to = "common") {
+  if (to === "business") return process.env.DEVKIT_NOTIFY_BUSINESS_CMD || process.env.DEVKIT_NOTIFY_CMD || null;
+  if (to === "technical") return process.env.DEVKIT_NOTIFY_TECH_CMD || process.env.DEVKIT_NOTIFY_CMD || null;
+  return process.env.DEVKIT_NOTIFY_CMD || process.env.DEVKIT_NOTIFY_TECH_CMD || process.env.DEVKIT_NOTIFY_BUSINESS_CMD || null;
 }

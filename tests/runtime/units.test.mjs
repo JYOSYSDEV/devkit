@@ -108,9 +108,21 @@ test("設定の確かめ: 検証の段階の隔離を広げる引数は受け付
   const cfg = loadConfig(ctx);
   assert.deepEqual(configProblems(cfg), []);
   cfg.isolation.verifyArgs = ["--network", "host"];
-  assert.ok(configProblems(cfg).some((p) => /広げる/.test(p)));
-  cfg.isolation.verifyArgs = ["-v", "/:/host"];
-  assert.ok(configProblems(cfg).length);
+  assert.ok(configProblems(cfg).some((p) => /使えない指定/.test(p)));
+  // 許可リストで判定する（否定の一覧では漏れた書き方も断る）
+  for (const bad of [["-v", "/:/host"], ["--net=host"], ["--user", "0"], ["-u0"], ["--read-only=false"], ["--volumes-from", "x"], ["--env-file", "/etc/x"], ["-e", "HOME"], ["--entrypoint", "sh"], ["--privileged=true"], ["-p", "80:80"]]) {
+    cfg.isolation.verifyArgs = bad;
+    assert.ok(configProblems(cfg).length, JSON.stringify(bad));
+  }
+  for (const ok of [["--memory", "8g"], ["--cpus=2"], ["-e", "TZ=Asia/Tokyo"], ["--ulimit", "nofile=4096"]]) {
+    cfg.isolation.verifyArgs = ok;
+    assert.deepEqual(configProblems(cfg), [], JSON.stringify(ok));
+  }
+  cfg.isolation.verifyArgs = ["--add-host", "x:1.2.3.4"];
+  assert.ok(configProblems(cfg).length, "検証の段階に --add-host は足せない");
+  cfg.isolation.verifyArgs = [];
+  cfg.isolation.installArgs = ["--add-host", "registry.local:10.0.0.5"];
+  assert.deepEqual(configProblems(cfg), []);
   assert.ok(configProblems({ ...loadConfig(ctx), permissionMode: "bypassPermissions" }).length);
   assert.ok(configProblems({ ...loadConfig(ctx), aiSandbox: "maybe" }).length);
 });

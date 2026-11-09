@@ -135,6 +135,8 @@ export function devkit(dir, args, { scenarioFile, human = false, env = {} } = {}
       DEVKIT_FAKE_SCENARIO: scenarioFile ?? "",
       FAKE_DOCKER_LOG: scenarioFile ? `${scenarioFile}.docker.log` : "",
       ...(human ? { DEVKIT_HUMAN_TTYLESS: "1", DEVKIT_HUMAN_TEST: "1" } : {}),
+      // 試験の時計（DEVKIT_NOW）を使えるようにする（本番では DEVKIT_TEST_CLOCK がないので効かない）
+      DEVKIT_TEST_CLOCK: "1",
       ...env,
     },
     timeout: 120_000,
