@@ -11,7 +11,7 @@
 | `tier` | 運用レベル（`lite` / `standard` / `ha`） |
 | `users` | 誰が何人くらい使うか |
 | `personalData` | 個人情報を保存するか（`stored`）と、その項目（`items`） |
-| `auth` | 認証方式（`dev` / `none` / `better-auth` / `sso-entra` / `sso-google`） |
+| `auth` | 認証方式（`dev` / `none` / `better-auth` / `sso-entra` / `sso-google` / `sso-lineworks`） |
 | `externalHosts` | 接続してよい外部のホスト（`api.example.co.jp`・`*.example.co.jp`）。ここにない接続先を加えると ESC-02 のフラグ |
 | `released` | 本番にリリースしたか |
 | `releasedMigration` | 本番に適用済みの最後のマイグレーション名（例: `0003_add_status`） |

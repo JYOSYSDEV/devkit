@@ -1,6 +1,6 @@
 # 社内標準（devkit 標準）
 
-版: `2026.11.2`（[VERSION](VERSION)）／ 管理: 標準オーナー（案件では `docs/profile.json` の `owners.technical`）
+版: `2026.11.3`（[VERSION](VERSION)）／ 管理: 標準オーナー（案件では `docs/profile.json` の `owners.technical`）
 
 Claude Code で開発する案件は、技術の判断をこの標準に従って行う。業務担当者は「何を・なぜ作るか」の判断に集中し、AI エージェントは「どう作るか」を標準の範囲で受け持つ。標準で決められないことは、AI が自分で決めずに止まり、人に判断を求める（[5. 例外ルール](05-exceptions.md)）。
 

@@ -532,7 +532,7 @@ function relOf(dir, target, { asDir = false } = {}) {
 }
 
 // glob の書き方（.devkit/c*.json など）は、保護されたファイルに当たりうるかで判定する
-const PROBES = [".devkit/state.json", ".devkit/controls.json", ".devkit/config.json", ".devkit/journal.jsonl", ".devkit/events.jsonl", ".devkit/run.json", ".devkit/version.json", ".devkit/evidence/x.json", ".devkit/briefings/x.md", ".devkit/cache/supervisor/state.json", "docs/decisions.md", "docs/exceptions.json", ".git/config", ".git/hooks/pre-commit"];
+const PROBES = [".devkit/state.json", ".devkit/controls.json", ".devkit/config.json", ".devkit/journal.jsonl", ".devkit/events.jsonl", ".devkit/run.json", ".devkit/version.json", ".devkit/evidence/x.json", ".devkit/briefings/x.md", ".devkit/decisions/x.json", ".devkit/cache/supervisor/state.json", "docs/decisions.md", "docs/exceptions.json", ".git/config", ".git/hooks/pre-commit"];
 function protectedTarget(rel) {
   if (!rel) return false;
   if (/[*?[{]/.test(rel)) {

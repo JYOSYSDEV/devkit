@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.2",
+  "version": "2026.11.3",
   "node": "24",
   "note": "ここにある依存は、バージョンを完全固定すれば例外承認なしで使える（TECH-01・TECH-02）。ないものが必要なら実装せずに技術の判断依頼を出す（ESC-01）。名前に * があるものはパターンで、* は / を含まない1文字以上に当てはまる（例: @radix-ui/react-* は @radix-ui/react-dialog に当てはまる）。builtDependencies はインストール時のスクリプト（postinstall など）の実行を許すパッケージ（package.json と pnpm-workspace.yaml の onlyBuiltDependencies に書いてよいもの）。出典は docs/devkit/stack.md の「採用一覧」と「必要になったら使う標準」",
   "core": {

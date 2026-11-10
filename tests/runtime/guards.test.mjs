@@ -74,6 +74,8 @@ test("状態ファイル・判断の記録・社内標準は誰も直接編集�
   assert.equal(edit(".devkit/controls.json", "{}").code, 2);
   assert.equal(edit("docs/decisions.md", "x").code, 2);
   assert.equal(edit("docs/standard/rules.json", "{}").code, 2);
+  assert.equal(edit("docs/standard/owners.json", "{}").code, 2, "標準オーナーのパスキーの公開鍵");
+  assert.equal(edit(".devkit/decisions/DEC-1.json", "{}").code, 2, "署名された決定の記録");
   assert.equal(edit(".devkit/graph.json", "{}").code, 0, "計画はメインセッションが kickoff・再計画で書く（承認のハッシュで守る）");
 });
 

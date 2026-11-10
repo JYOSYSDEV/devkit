@@ -27,7 +27,7 @@
 
 | 用途 | 標準 | 補足 |
 |---|---|---|
-| 認証 | Better Auth | 社内 SSO は OIDC（Microsoft Entra ID / Google Workspace）。資格情報が要るので人間ゲートを付ける |
+| 認証 | Better Auth | 社内 SSO は OIDC（Microsoft Entra ID / Google Workspace / LINE WORKS）。資格情報が要るので人間ゲートを付ける |
 | 日付 | `date-fns` + `@date-fns/tz` | 表示は `Asia/Tokyo` |
 | メール送信 | 社内の SMTP を `nodemailer` で | 送信先と資格情報が要るので人間ゲートを付ける。呼び出しは `src/server/external/` |
 | ファイル保存 | S3 互換ストレージ（`@aws-sdk/client-s3`） | 開発時は MinIO。呼び出しは `src/server/external/` |

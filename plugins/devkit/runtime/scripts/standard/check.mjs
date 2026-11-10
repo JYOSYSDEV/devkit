@@ -2045,7 +2045,7 @@ check("SEC-11", () => {
 // ---------------------------------------------------------------------------
 
 const TIERS = ["lite", "standard", "ha"];
-const AUTHS = ["dev", "none", "better-auth", "sso-entra", "sso-google"];
+const AUTHS = ["dev", "none", "better-auth", "sso-entra", "sso-google", "sso-lineworks"];
 const HOST_RE = /^(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]*[a-z][a-z0-9-]*$|^\d{1,3}(?:\.\d{1,3}){3}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 

@@ -11,4 +11,5 @@
 # .devkit/controls.json              <org>/<standard-owners>
 # .devkit/config.json                <org>/<standard-owners>
 # .devkit/journal.jsonl              <org>/<standard-owners>
+# .devkit/decisions/                 <org>/<standard-owners>
 # src/server/auth/                   <org>/<standard-owners>

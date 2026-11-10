@@ -93,7 +93,7 @@ flowchart LR
    - 決定した人が `docs/profile.json` の `owners.technical` にいる（代理は、`owners.json` に載っている別の標準オーナーが、理由を付けて代理として署名したときだけ）
    - 変更案が付いていれば、変更案のハッシュが署名の対象に入っていて、当てる先のファイルが変更案を作ったときの内容のまま
    - 役割が、その判断に要る役割である（既存の `requiredRoles`・`requestRole`・`proposalNeededRoles`）
-4. **反映は既存の関数で。** 端末のコマンドと同じ関数（ADR-0007 の「判断の関数の切り出し」）を呼び、`controls.json`・journal（`command: "hub approve"` と封筒のハッシュ）・`decisions.md`（内容の欄に「ハブ経由・申請の ID」）に書く。封筒は `.devkit/hub/decisions/<ID>.json` に保存してコミットする（後から git だけで署名を検証できる）。
+4. **反映は既存の関数で。** 端末のコマンドと同じ関数（ADR-0007 の「判断の関数の切り出し」）を呼び、`controls.json`・journal（`command: "hub approve"` と封筒のハッシュ）・`decisions.md`（内容の欄に「ハブ経由・申請の ID」）に書く。封筒は `.devkit/decisions/<ID>.json` に保存してコミットする（後から git だけで署名を検証できる）。
 5. Supervisor が動いていない案件は、`pnpm devkit hub sync` を手で実行する（表示と同期だけ。判断は出せない）。
 
 ### 決定の封筒と署名
@@ -104,8 +104,7 @@ flowchart LR
     "v": 1, "id": "DEC-000123",
     "project": "equipment", "application": "N7-2",
     "kind": "answer", "target": "N7", "binding": { "request": "N7-2", "planHash": "9b1f…" },
-    "decision": "approve", "role": "technical", "note": "接続先は社内の API だけ。見直しは半年後",
-    "changes": { "hash": "<変更案のハッシュ>", "ops": [{ "op": "profile.externalHosts.add", "host": "api.partner.co.jp" }] },
+    "role": "technical", "note": "接続先は社内の API だけ。見直しは半年後",
     "by": { "name": "技術 花子", "email": "hanako@example.co.jp", "sub": "<LINE WORKS の利用者 ID>" },
     "at": "2026-11-10T08:41:12+09:00", "expiresAt": "2026-11-17T08:41:12+09:00"
   },
@@ -113,7 +112,7 @@ flowchart LR
 }
 ```
 
-- `kind` は `approve-plan`・`approve-milestone`・`approve-before`・`reject-milestone`・`answer`・`proposal-accept`・`proposal-reject`・`exception-add`・`change`。
+- `kind` は `approve-plan`・`approve-milestone`・`approve-before`・`reject-milestone`・`answer`・`proposal-accept`・`proposal-reject`・`change`（例外の登録は、`exception.add` の操作を持つ `change`）。上の例は、判断依頼への回答。変更案を当てる決定は `kind: "change"` で、`changes` に操作の並びとハッシュを入れる。
 - 署名するのは、ハブではなく本人。ハブの画面は、決定の本体を正規化した JSON の SHA-256 を WebAuthn の `challenge` にして、`navigator.credentials.get`（`userVerification: "required"`）を呼ぶ。パスキーが返したアサーションを、そのまま封筒に入れる。
 - 案件の側の検証は `node:crypto` だけで行う（依存パッケージなし）。ES256（P-256）と EdDSA を受け付ける。RS256 だけの認証器は、登録のときに断る。
 - **公開鍵の置き場所は `docs/standard/owners.json`**（標準オーナーの名前・メール・パスキーの ID と公開鍵）。封印の対象で、標準の版と一緒にプラグインのリポジトリから配る。ハブの DB にある鍵は表示と登録のためのもので、検証には使わない（ハブが破られても、鍵を差し替えて決定を作ることはできない）。
@@ -132,12 +131,12 @@ flowchart LR
 | `profile.personalData.set`・`profile.auth.set`・`profile.tier.set` | `docs/profile.json` | 技術（`tier` は業務も） |
 | `profile.owners.passkey.add`・`remove`（業務担当者のパスキー。ADR-0007） | `docs/profile.json` | 技術 |
 | `plan.replace`（再計画の案。今の `proposal accept` と同じ） | `.devkit/graph.json` | 案の確認者の役割 |
-| `limits.addCycles`（サイクル上限の追加） | `controls.json` | 技術 |
+| `limits.addCycles`（サイクル上限の追加。今の上限に紐づける） | `controls.json` | 技術 |
 | `config.set`（許可した項目だけ: `briefing.*`・`supervisor.hours`・`supervisor.limits`・`supervisor.retry`・`hub.*`） | `.devkit/config.json` | 技術 |
 | `dependency.add`（版まで固定した依存の追加） | `package.json`・lockfile | 技術（第2段階。下） |
 
 - 承認する人は、承認の前に値を直せる（見直し期限など）。署名の対象は、直した後の操作の並びのハッシュと、当てる先のファイルの今のハッシュ。
-- 当てるのは案件の側の `lib/changes.mjs`。署名と紐づけを確かめた後、当てる先が変更案を作ったときの内容のままなら当て、journal・`decisions.md` に残してコミットする。内容が変わっていたら当てずに、変更案を作り直して出し直す。当てた後、`pnpm standard:check` を通す。
+- 当てるのは案件の側の `lib/changes.mjs`。署名と紐づけを確かめた後、当てる先が変更案を作ったときの内容のままなら当て、journal・`decisions.md` に残してコミットする。内容が変わっていたら当てずに、変更案を作り直して出し直す。当てた後に `pnpm standard:check` で確かめるよう案内する（標準の違反は、次の機械検証とゲートでも見つかる）。
 - **変更案では変えられないもの（端末で、人が）**: 隔離をゆるめる設定（`aiSandbox`・`isolation.mode`・`permissionMode`・`supervisor.allowApiKey`）、`docs/standard/`・`scripts/`・`.claude/`（プラグインの版で配る）、`owners` の人の追加と削除、仕様書の本文。
 - `dependency.add` は、ADR-0006 で見送った「自己修復」の最初の対象に当たる。ADR-0006 の条件（AI には共有ファイルの書き込みを渡さない・版まで固定・保護された実行部が専用のブランチで当てる・当てた後に全体検証）をそのまま守り、ほかの操作の運用を見てから第2段階で入れる。それまでは、例外（`exception.add`）の承認までを自動にし、`pnpm add` は人が行う。
 
@@ -193,6 +192,22 @@ ADR-0006 の「通知の返信だけで承認済みにはしない（判断は�
 | 2 | パスキーの登録と、署名付きの決定: 技術の判断依頼・例外・技術の承認・再計画の案。変更案の自動の適用（`dependency.add` を除く）。LINE WORKS の Bot の通知 | 標準オーナーのパスキーが、判断の経路に加わる |
 | 3 | `dependency.add`（ADR-0006 の段階3の条件で）、横断の集計と標準の改訂の PR の下書き | ランナーの保護された実行部が、共有ファイルを書く |
 
+## 段階0の実装（2026-11-10）
+
+| 入れたもの | 場所 |
+| --- | --- |
+| 判断の関数の切り出し（端末のコマンドの動きは同じ） | `lib/decisions.mjs` |
+| WebAuthn のアサーションの検証（ES256・EdDSA）と、正規化した JSON | `lib/webauthn.mjs` |
+| 封筒の検査（形式・案件・期限・1回だけ・本人の鍵・対象の版）と反映 | `lib/envelope.mjs` |
+| 変更案（操作の表・差分・ハッシュ・役割がそろってからの適用） | `lib/changes.mjs` |
+| 公開鍵と画面の情報の置き場所（空で配る） | `docs/standard/owners.json`・`hub.json` |
+| LINE WORKS の SSO（`sso-lineworks`） | 社内標準 2026.11.3 |
+| 試験（試験用の鍵で作ったアサーション） | `tests/runtime/passkey-decisions.test.mjs` |
+
+この段階では、封筒を受け取る入口（コンソールのサーバー・ハブとの同期・CLI のコマンド）はまだない。`owners.json` と `hub.json` が空で、`console.port` がない案件では、署名された決定は受け付けない。
+
+段階0でまだ入れていないもの: 代理での署名（パスキーの決定では断る。代理は端末で）、リリースの技術承認の `--force`（端末だけ）、`dependency.add`、変更案を当てた後の標準チェッカーの自動の実行。
+
 ## 残っている確認
 
 1. LINE WORKS の契約プランで、利用者のアカウントでの OIDC と Bot が使えること。テナント ID とリダイレクト先（ハブの URL）。
@@ -202,7 +217,7 @@ ADR-0006 の「通知の返信だけで承認済みにはしない（判断は�
 
 ## 影響
 
-- 案件: `docs/standard/owners.json`（標準オーナーとパスキーの公開鍵）・`docs/standard/hub.json`（ハブの origin と rpId）、`.devkit/config.json` の `hub`（`url`・`materials`）、`.devkit/hub/`（送信待ち・受け取った封筒）、`DEVKIT_HUB_TOKEN`（環境変数）。ガードに、`.devkit/hub/decisions/` の編集と、ハブの API への Claude からの書き込みを止める規則を足す。
+- 案件: `docs/standard/owners.json`（標準オーナーとパスキーの公開鍵）・`docs/standard/hub.json`（ハブの origin と rpId）、`.devkit/config.json` の `hub`（`url`・`materials`）、`.devkit/hub/`（送信待ち・受け取った封筒）、`DEVKIT_HUB_TOKEN`（環境変数）。ガードに、`.devkit/decisions/` の編集と、ハブの API への Claude からの書き込みを止める規則を足す。
 - プラグイン: `devkit-standard-exception`・`devkit-gate-review`・`devkit-status` に、ハブがあるときの案内を足す。
 - 社内標準: LINE WORKS の SSO を足す改訂（VERSION・CHANGELOG・チェッカー・雛形）。
 - このリポジトリ: `apps/hub/` と、その CI・配置の手順（`docs/rollout.md` に章を足す）。

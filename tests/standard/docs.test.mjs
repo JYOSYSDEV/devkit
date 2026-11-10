@@ -28,7 +28,7 @@ describe("rules.json", () => {
 
   test("版は VERSION・rules.json・dependencies.json でそろっている", () => {
     const version = read("VERSION").trim();
-    assert.equal(version, "2026.11.2");
+    assert.equal(version, "2026.11.3");
     assert.equal(RULES.version, version);
     assert.equal(JSON.parse(read("dependencies.json")).version, version);
     assert.match(read("CHANGELOG.md"), new RegExp(`^## ${version.replace(/\./g, "\\.")}`, "m"));

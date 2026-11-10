@@ -58,10 +58,10 @@
 
 ## 認証と認可
 
-- 認証は Better Auth（ID・パスワード、社内 SSO は OIDC で Microsoft Entra ID / Google Workspace）。セッションは HttpOnly・Secure・SameSite の Cookie で、トークンをブラウザの JavaScript に持たせない
+- 認証は Better Auth（ID・パスワード、社内 SSO は OIDC で Microsoft Entra ID / Google Workspace / LINE WORKS）。セッションは HttpOnly・Secure・SameSite の Cookie で、トークンをブラウザの JavaScript に持たせない
 - 認証の方式は `AUTH_MODE`（`src/lib/env.ts`）で決まる。`dev` は開発用の利用者（役割は Cookie か `DEV_AUTH_ROLE` で切り替える）、`none` は誰もログインしていない扱い、`better-auth` は本番の認証
 - 開発用の利用者が働くのは `next dev` と E2E 用のビルドだけ。E2E 用のビルドは、ビルドのときの `DEVKIT_E2E_AUTH=1`（playwright.config.ts だけが付ける。出力先も分ける）で決まり、起動時の環境変数では有効にできない。通常の `pnpm build` のビルドでは、`AUTH_MODE=dev` で起動しても誰もログインしていない扱いになる（エラーで止めず、安全側に倒す）
 - `AUTH_MODE=dev` と `DEVKIT_E2E_AUTH` は、デプロイの設定（Dockerfile・compose・`.env.production*`・deploy / infra / terraform / k8s / helm）と、本番のビルドと起動のスクリプト（package.json の build・start と、Dockerfile から呼ぶもの）に書かない。CI のテスト（`.github/workflows`）で使うのは可。リリース前の検査（SEC-09）が検出する
-- リリース前の検査は、`docs/profile.json` の `auth` と実装が合っているかも確かめる。`better-auth`・`sso-entra`・`sso-google` なら、better-auth が dependencies にあり、`src/server/auth/session.ts`（かそれが読む `src/server/auth/` のモジュール）が Better Auth を使っていること。`dev` のままではリリースできない。`none`（認証なしの公開）は標準の例外承認（rules: SEC-09、subject: `auth:none`）が必要
+- リリース前の検査は、`docs/profile.json` の `auth` と実装が合っているかも確かめる。`better-auth`・`sso-entra`・`sso-google`・`sso-lineworks` なら、better-auth が dependencies にあり、`src/server/auth/session.ts`（かそれが読む `src/server/auth/` のモジュール）が Better Auth を使っていること。`dev` のままではリリースできない。`none`（認証なしの公開）は標準の例外承認（rules: SEC-09、subject: `auth:none`）が必要
 - 認可は権限表（`src/server/auth/permissions.ts`）だけで決める。画面の入口（SEC-11）とデータの更新（SEC-01）の両方で確かめ、画面でボタンを隠すだけにしない
 - 社外の利用者や複数の取引先が使う場合は、データの範囲（自社のデータしか見えない）を受け入れ基準に入れてテストする

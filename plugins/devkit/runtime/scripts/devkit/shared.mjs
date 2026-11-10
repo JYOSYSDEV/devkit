@@ -86,6 +86,7 @@ export const PROTECTED_STATE_FILES = [
   /^\.devkit\/journal\.jsonl$/,
   /^\.devkit\/events\.jsonl$/,
   /^\.devkit\/briefings(\/|$)/,
+  /^\.devkit\/decisions(\/|$)/,
   /^\.devkit\/cache\/supervisor(\/|$)/,
   /^\.devkit\/cache\/journal-anchor\.json$/,
   /^docs\/decisions\.md$/,

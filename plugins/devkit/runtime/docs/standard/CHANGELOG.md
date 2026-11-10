@@ -1,5 +1,11 @@
 # 変更履歴
 
+## 2026.11.3（LINE WORKS の SSO と、パスキーの公開鍵の置き場所）
+
+- 認証: 社内 SSO に LINE WORKS（OAuth 2.0 + OpenID Connect）を加えた。`docs/profile.json` の `auth` に `sso-lineworks` を書ける（Better Auth の汎用の OIDC で受ける。リリース前検査の扱いは `sso-entra`・`sso-google` と同じ）
+- `owners.json`（標準オーナーの名前・メール・パスキーの公開鍵）と `hub.json`（ハブの origin と rpId）を加えた。パスキーで署名された決定を、案件の側で確かめるために使う（devkit の ADR-0008）。どちらも空で配り、ハブを置くときに標準オーナーが書いて版を上げる
+- ルールの追加・変更はない（47 件のまま）
+
 ## 2026.11.2（独立レビューの指摘を直した版）
 
 標準チェッカーの独立レビューで見つかった抜け道と誤検出を直した。ルールは 47 件（ARCH-11 と DEPS を加えた）。
