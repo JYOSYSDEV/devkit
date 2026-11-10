@@ -50,6 +50,27 @@ export function writeJson(path, data) {
   writeText(path, `${JSON.stringify(data, null, 2)}\n`);
 }
 
+// Biome の整形（幅 120・字下げ 2）に合う JSON の文字列。docs/ の下に devkit が書くファイル（docs/exceptions.json）に使う。
+// 値だけの配列は、幅に収まれば1行（"rules": ["TECH-01", "TECH-02"]）。中身のあるオブジェクトは必ず開く
+export function biomeJson(value, { width = 120 } = {}) {
+  const fmt = (v, depth, prefix) => {
+    const pad = "  ".repeat(depth);
+    if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
+    if (Array.isArray(v)) {
+      if (!v.length) return "[]";
+      if (v.every((x) => x === null || typeof x !== "object")) {
+        const one = `[${v.map((x) => JSON.stringify(x) ?? "null").join(", ")}]`;
+        if (pad.length + prefix + one.length + 1 <= width) return one;
+      }
+      return `[\n${v.map((x) => `${pad}  ${fmt(x === undefined ? null : x, depth + 1, 0)}`).join(",\n")}\n${pad}]`;
+    }
+    const keys = Object.keys(v).filter((k) => v[k] !== undefined);
+    if (!keys.length) return "{}";
+    return `{\n${keys.map((k) => `${pad}  ${JSON.stringify(k)}: ${fmt(v[k], depth + 1, JSON.stringify(k).length + 2)}`).join(",\n")}\n${pad}}`;
+  };
+  return `${fmt(value, 0, 0)}\n`;
+}
+
 export function writeText(path, text) {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp-${process.pid}`;

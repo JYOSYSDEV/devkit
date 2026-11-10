@@ -7,7 +7,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, join, posix, relative } from "node:path";
-import { isProtectedPath, isSharedPath, isTestPath, weakeningOf } from "../shared.mjs";
+import { isProtectedPath, isSharedPath, isTestish, weakeningOf } from "../shared.mjs";
 import { changedFiles, diffLines, git, isCommit, lsTree, showFile } from "./git.mjs";
 import { copyScreens, isolationConfig, runIsolated, runProcess, safeReadJson, sanitizedHostEnv, workBase } from "./isolation.mjs";
 import { matchesAny, readJson, sha256, tail, writeJson } from "./util.mjs";
@@ -342,7 +342,7 @@ export function modeProblems(ctx, sha, changed) {
 
 export function weakeningProblems(ctx, base, tip, changed, { allowRemoval = [] } = {}) {
   const problems = [];
-  const tests = changed.filter((f) => isTestPath(f) || /(^|\/)(vitest|playwright)\.setup\.|^tests\/setup|^e2e\/(fixtures|global-setup|global-teardown)/.test(f));
+  const tests = changed.filter(isTestish);
   if (!tests.length) return problems;
   const lines = diffLines(ctx.root, base, tip, { paths: tests });
   if (lines === null) return ["テストの差分を取れませんでした（安全のため不合格）"];

@@ -7,6 +7,7 @@
 //   pnpm devkit logs [--dir <dir>]    最新の実行ログの要約
 //   pnpm devkit gate <マイルストーン>   確認資料（.devkit/gates/<ID>.html）を作り直す
 //   pnpm devkit next                  次に実行される作業（表示だけ）
+//   pnpm devkit doctor [--json]       起動前の検査（コンテナ・サンドボックス・AI の担当・未コミットの変更・記録の照合・人が編集するファイルの形）をまとめて行う
 //   pnpm devkit start                 承認済みの計画で開始する（サイクル上限を記録）
 //   pnpm devkit run [--until 07:00] [--max-hours N] [--max-cost-usd N] [--detach]   ランナーを起動
 //   pnpm devkit pause [理由]          止める（ランナーは今の作業が終わり次第止まる）
@@ -37,6 +38,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildBriefing, flushOutbox, produceBriefing, writeBriefing } from "./lib/briefing.mjs";
 import { now as clockNow } from "./lib/clock.mjs";
+import { diagnose, doctorText } from "./lib/doctor.mjs";
 import { checkOwner, commitPaths, identity, recordDecision, requireHuman } from "./lib/human.mjs";
 import { committedUnexplained, journal, journalProblem, journalWrite, uncommittedUnexplained, updateAnchor } from "./lib/seal.mjs";
 import {
@@ -71,7 +73,7 @@ import { Supervisor, supervisorAlive } from "./lib/supervisor.mjs";
 import { readSupervisorState, SUPERVISOR_STOPS } from "./lib/supstate.mjs";
 import { parseRunLimits, run } from "./lib/runner.mjs";
 import { appendProgress, computeStatus, runnerAlive, statusText } from "./lib/status.mjs";
-import { DevkitError, fail, localStamp, nowIso, parseArgs, readJson, sleep, writeJson, writeText } from "./lib/util.mjs";
+import { biomeJson, DevkitError, fail, localStamp, nowIso, parseArgs, readJson, sleep, writeJson, writeText } from "./lib/util.mjs";
 import { checkout, removeCheckout, runChecker } from "./lib/verify.mjs";
 import { normalizeRole, ROLE_LABEL, ROLE_PERSON, SHARED_LABELS } from "./shared.mjs";
 import { DEVKIT_VERSION } from "./version.mjs";
@@ -275,6 +277,11 @@ const commands = {
     appendProgress(ctx, `開始（マイルストーン ${g.milestones.length}、ノード ${g.nodes.length}）`);
     commitPaths(ctx, [".devkit/state.json", ".devkit/controls.json", ".devkit/progress.md", ".devkit/journal.jsonl"], "devkit: start");
     out("開始しました。ランナーは `pnpm devkit run`（夜間に回すなら `pnpm devkit run --until 07:00 --detach`）");
+    // ランナーを起動する前に直すことを、ここでまとめて示す（起動時の検査は、止まる理由を1つずつしか出さない）
+    try {
+      const todo = diagnose(ctx, loadConfig(ctx)).filter((x) => x.level === "problem");
+      if (todo.length) out(`\nランナーを起動する前に、次を直してください（もう一度確かめるには pnpm devkit doctor）:\n${doctorText(todo)}`);
+    } catch {}
   },
 
   // 止める（誰でも。Claude からも）。controls.json に書き、ランナーは次の手で止まる
@@ -622,7 +629,8 @@ const commands = {
     const id = `EXC-${String(doc.exceptions.length + 1).padStart(3, "0")}`;
     const today = new Date().toLocaleDateString("sv-SE");
     doc.exceptions.push({ id, rules, subject, reason, adr, approvedBy: who.name, approvedAt: today, reviewBy });
-    journalWrite(ctx, "docs/exceptions.json", `${JSON.stringify(doc, null, 2)}\n`, "exception add");
+    // docs/ は Biome の対象なので、その整形に合わせて書く（合っていないと pnpm verify が落ちる）
+    journalWrite(ctx, "docs/exceptions.json", biomeJson(doc), "exception add");
     recordDecision(ctx, { role: r, who, target: `標準の例外 ${id}（${rules.join(",")} / ${subject}）`, decision: "例外の承認", content: `${reason}（見直し ${reviewBy}、${adr}）`, delegateOf: owner.delegateOf, command: "exception add" });
     commitPaths(ctx, ["docs/exceptions.json", adr, "docs/decisions.md", ".devkit/journal.jsonl"], `devkit: 標準の例外 ${id} を承認`);
     out(`${id} を登録しました。pnpm standard:check で違反が消えたことを確かめてください`);
@@ -700,6 +708,18 @@ const commands = {
     for (const e of box.slice(-3)) out(`配信 ${e.deadline}: ${e.status}${e.lastError ? `（${e.lastError}）` : ""}`);
     if (next) out(`次の照合での判断: ${next.start ? `ランナーを起動する（${next.reason}）` : `${next.stop ?? next.status}: ${next.reason}`}`);
     if (SUPERVISOR_STOPS.includes(st.status)) out("解除は、原因を直してから標準オーナーが端末で pnpm devkit supervisor clear --role 技術 --note \"…\"");
+  },
+
+  // 起動前の検査。ランナーが最初の作業を始めるまでに人の手続きで止まりうることを、止めずにまとめて確かめる（何も書き換えない）
+  doctor() {
+    const items = diagnose(ctx, loadConfig(ctx));
+    const bad = items.filter((x) => x.level === "problem");
+    if (opts.json) out(JSON.stringify({ ok: bad.length === 0, items }, null, 2));
+    else {
+      out(`起動前の検査（${ctx.root}）\n${doctorText(items)}`);
+      out(bad.length ? `\n直すことが ${bad.length} 件あります。承認・seal accept などの人のコマンドは、Claude Code の外の端末で実行します（入力欄の ! からも実行できません）` : "\n直すことはありません。ランナーは pnpm devkit run");
+    }
+    if (bad.length) process.exitCode = 1;
   },
 
   // 記録（state.json・controls.json・exceptions.json）が devkit のコマンドとランナーの書いたものか。

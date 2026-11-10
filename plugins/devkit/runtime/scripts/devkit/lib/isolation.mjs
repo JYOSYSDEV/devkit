@@ -15,7 +15,7 @@ import { sha256 } from "./util.mjs";
 
 export const ISOLATION_DEFAULTS = {
   mode: "container", // container | none（none は隔離なし。テストと、隔離できない環境で人が明示したときだけ）
-  engine: "docker", // docker | podman（実行ファイルの名前かパス）
+  engine: null, // docker | podman（実行ファイルの名前かパス）。省略時は自動（Docker が使えればそれ、だめなら Podman）
   image: null, // 省略時は package.json の @playwright/test の版に合わせた mcr.microsoft.com/playwright:v<版>-noble
   installNetwork: "bridge", // 依存のインストールのネットワーク（プロキシが 127.0.0.1 にある環境では host）
   memory: "6g",
@@ -48,7 +48,37 @@ export function projectKey(ctx) {
 }
 
 export function isolationConfig(config = {}) {
-  return { ...ISOLATION_DEFAULTS, ...(config.isolation ?? {}) };
+  const iso = { ...ISOLATION_DEFAULTS, ...(config.isolation ?? {}) };
+  // エンジンの指定がなければ、使えるものを選ぶ（Docker → Podman）。隔離なしのときは確かめない
+  if (!iso.engine || iso.engine === "auto") {
+    iso.engineAuto = true;
+    iso.engine = iso.mode === "container" ? detectEngine() : "docker";
+  }
+  return iso;
+}
+
+export const ENGINE_CANDIDATES = ["docker", "podman"];
+let DETECTED = null;
+
+// 使えるエンジン。どれも使えなければ docker（理由は engineProblem が候補ごとに示す）
+export function detectEngine() {
+  if (DETECTED) return DETECTED;
+  DETECTED = ENGINE_CANDIDATES.find((e) => engineInfo({ engine: e }).ok) ?? ENGINE_CANDIDATES[0];
+  return DETECTED;
+}
+
+const ENGINE_HELP =
+  'エンジンを指定するなら、人が .devkit/config.json に {"isolation":{"engine":"podman"}} のように書いてコミットします（ファイルがなければ新しく作る。Claude からは編集できない）。' +
+  "隔離なしで回すなら isolation.mode を none にします（推奨しない）";
+
+// 検証用のコンテナが使えない理由（使えるなら null）。起動前の検査が使う
+export function engineProblem(config = {}) {
+  const iso = isolationConfig(config);
+  if (iso.mode !== "container") return null;
+  if (engineInfo(iso).ok) return null;
+  const tried = iso.engineAuto ? ENGINE_CANDIDATES : [iso.engine];
+  const why = tried.map((e) => `${e}: ${engineInfo({ engine: e }).reason}`).join("、");
+  return `検証用のコンテナ（${tried.join("・")}）を使えません（${why}）。Docker か Podman を動かしてください。${ENGINE_HELP}`;
 }
 
 // 作業場所のルート。印のファイルを置き、devkit のコマンドがここの中では「作業用の場所」と分かるようにする
@@ -186,6 +216,7 @@ export function engineInfo(iso) {
 
 export function resetEngineCache() {
   ENGINE_CACHE = new Map();
+  DETECTED = null;
 }
 
 // 取り出したフォルダから、使うイメージと pnpm の版を決める（package.json は共有ファイルで、作業では変えられない）

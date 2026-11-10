@@ -1,8 +1,9 @@
 // ランナーから AI（Claude Code の非対話セッション）を起動する。
 // 1回の呼び出し = 1つの `claude -p` プロセス。役割ごとにエージェント・使える道具・制限時間・予算を固定する。
 import { spawn } from "node:child_process";
-import { createWriteStream, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 // ---- 構造化出力のスキーマ（--json-schema） ----
 
@@ -85,6 +86,8 @@ export const TOOLS = {
     ...GIT_READ,
     "Bash(git add *)",
     "Bash(git commit *)",
+    // ファイルの削除（雛形の見本を消すノードなど）。消してよいのは owns の中で、テストは計画の allowTestRemoval にあるものだけ（guard-bash と機械検証が確かめる）
+    "Bash(git rm *)",
     "Bash(pnpm verify*)",
     "Bash(pnpm lint*)",
     "Bash(pnpm format*)",
@@ -122,11 +125,22 @@ export const ENV_ERROR = [
 export function classifyEnvError({ result, stderr, timedOut, spawnError = null }) {
   if (timedOut) return null;
   if (spawnError) return `claude を起動できない: ${spawnError}`;
-  if (result === null) return firstLine(stderr) || "claude が結果を返さずに終了した";
+  if (result === null) return withHelp(firstLine(stderr) || "claude が結果を返さずに終了した", stderr);
   if (!result.is_error) return null;
   const errText = `${stderr ?? ""}\n${result.result ?? ""}`;
-  if (ENV_ERROR.some((re) => re.test(errText)) || (result.num_turns ?? 0) === 0) return firstLine(errText) || "claude が作業を開始できなかった";
+  if (ENV_ERROR.some((re) => re.test(errText)) || (result.num_turns ?? 0) === 0) return withHelp(firstLine(errText) || "claude が作業を開始できなかった", errText);
   return null;
+}
+
+const AGENT_NOT_FOUND = /agent ['"`]?[\w:-]+['"`]? (was )?not found|unknown agent/i;
+export const AGENT_HELP =
+  "ランナーは、リポジトリの外の作業ディレクトリで、利用者の設定だけを読んで AI を起動します（プロジェクトの .claude/settings.json は読まない）。" +
+  "devkit プラグインを利用者の設定で有効にする（Claude Code で /plugin → devkit を user の範囲で有効にする）か、" +
+  '人が .devkit/config.json に {"pluginDir":"<devkit プラグインのフォルダの絶対パス>"} を書いてコミットします';
+
+// 担当（エージェント）が見つからないときは、直し方を添える
+function withHelp(line, text) {
+  return AGENT_NOT_FOUND.test(String(text ?? "")) ? `${line}（${AGENT_HELP}）` : line;
 }
 
 function firstLine(text) {
@@ -186,6 +200,85 @@ export function runnerSettings({ ctx, config, role }) {
   return settings;
 }
 
+// ---- 担当（エージェント）の定義の場所 ----
+// ランナーは作業ディレクトリ（リポジトリの外）で、--setting-sources user（既定）で claude を起動する。
+// devkit プラグインがプロジェクトの設定でだけ有効だと、devkit:implementer などが見つからない。そこで、
+//   1) .devkit/config.json の pluginDir（相対パスは案件のルートから）
+//   2) 利用者の設定（~/.claude/settings.json の enabledPlugins）で devkit が有効 → そのまま
+//   3) インストール済みの devkit プラグイン（~/.claude/plugins/installed_plugins.json）の場所 → --plugin-dir で渡す
+// の順に決める。戻り値: { ok, pluginDir, how, problem }
+const AGENT_ROLES = ["implementer", "reviewer", "final-reviewer", "replanner"];
+let AGENTS_CACHE = new Map();
+
+export function resetAgentsCache() {
+  AGENTS_CACHE = new Map();
+}
+
+function claudeHome() {
+  const d = process.env.CLAUDE_CONFIG_DIR;
+  return d && isAbsolute(d) ? d : join(homedir(), ".claude");
+}
+
+function readJsonSafe(p) {
+  try {
+    return JSON.parse(readFileSync(p, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function hasAgents(dir) {
+  return AGENT_ROLES.every((r) => existsSync(join(dir, "agents", `${r}.md`)));
+}
+
+// インストール済みの devkit プラグインの場所（この案件に入れたものを先に、次に版の新しい順）
+function installedPluginDir(ctx) {
+  const doc = readJsonSafe(join(claudeHome(), "plugins", "installed_plugins.json"));
+  const plugins = doc?.plugins;
+  if (!plugins || typeof plugins !== "object") return null;
+  const entries = [];
+  for (const [key, list] of Object.entries(plugins)) {
+    if (!/^devkit@/.test(key)) continue;
+    for (const e of Array.isArray(list) ? list : [list]) if (e && typeof e.installPath === "string" && isAbsolute(e.installPath)) entries.push(e);
+  }
+  const root = ctx?.root ? resolve(ctx.root) : null;
+  const rank = (e) => (root && e.projectPath && resolve(String(e.projectPath)) === root ? 0 : 1);
+  entries.sort((a, b) => rank(a) - rank(b) || String(b.version ?? "").localeCompare(String(a.version ?? ""), "en", { numeric: true }));
+  return entries.map((e) => e.installPath).find(hasAgents) ?? null;
+}
+
+export function resolveAgents(ctx, config) {
+  const key = JSON.stringify([ctx?.root ?? "", config.pluginDir ?? null, config.agentPrefix ?? null, config.settingSources ?? null, claudeHome()]);
+  if (AGENTS_CACHE.has(key)) return AGENTS_CACHE.get(key);
+  const res = (() => {
+    if (config.pluginDir) {
+      const dir = resolve(ctx?.root ?? process.cwd(), String(config.pluginDir));
+      if (!hasAgents(dir)) return { ok: false, pluginDir: dir, how: "config", problem: `.devkit/config.json の pluginDir（${dir}）に devkit の担当の定義（agents/implementer.md など）がありません。devkit プラグインのフォルダ（.claude-plugin/ と agents/ がある場所）を指定してください` };
+      return { ok: true, pluginDir: dir, how: "config" };
+    }
+    // 担当の名前を変えている案件（agentPrefix）は、どこに定義があるかをここでは確かめられない
+    if ((config.agentPrefix ?? "devkit:") !== "devkit:") return { ok: true, pluginDir: null, how: "custom" };
+    const sources = String(config.settingSources ?? "user").split(",").map((x) => x.trim());
+    // 作業ディレクトリは案件の clone なので、project を読む設定なら、案件の .claude/settings.json が効く
+    // 管理者の設定（managed settings）は、--setting-sources に関係なく効く
+    const managed = process.platform === "darwin" ? "/Library/Application Support/ClaudeCode/managed-settings.json" : process.platform === "win32" ? "C:\\Program Files\\ClaudeCode\\managed-settings.json" : "/etc/claude-code/managed-settings.json";
+    const files = [managed, sources.includes("user") ? join(claudeHome(), "settings.json") : null, sources.includes("project") && ctx?.root ? join(ctx.root, ".claude", "settings.json") : null].filter(Boolean);
+    // extraArgs でプラグインを渡している案件は、そのまま使う
+    if ((config.extraArgs ?? []).some((a) => /^--plugin-(dir|url)(=|$)/.test(String(a)))) return { ok: true, pluginDir: null, how: "extraArgs" };
+    const enabled = files.some((f) => Object.entries(readJsonSafe(f)?.enabledPlugins ?? {}).some(([k, v]) => /^devkit@/.test(k) && v && !(Array.isArray(v) && !v.length)));
+    if (enabled) return { ok: true, pluginDir: null, how: "settings" };
+    const dir = installedPluginDir(ctx);
+    if (dir) return { ok: true, pluginDir: dir, how: "installed" };
+    return { ok: false, pluginDir: null, how: "none", problem: `ランナーが起動する AI から、devkit の担当（${agentName(config, "implementer")} など）が見つかりません。${AGENT_HELP}` };
+  })();
+  AGENTS_CACHE.set(key, res);
+  return res;
+}
+
+export function agentsProblem(ctx, config) {
+  return resolveAgents(ctx, config).problem ?? null;
+}
+
 export function agentName(config, role) {
   const base = role === "final-reviewer" ? "final-reviewer" : role;
   return `${config.agentPrefix ?? "devkit:"}${base}`;
@@ -211,7 +304,8 @@ export function runAgent({ ctx, config, role, cwd, prompt, logFile, timeoutMs, b
   if (schema) args.push("--json-schema", JSON.stringify(schema));
   if (budgetUsd) args.push("--max-budget-usd", String(budgetUsd));
   if (config.models?.[role]) args.push("--model", config.models[role]);
-  if (config.pluginDir) args.push("--plugin-dir", config.pluginDir);
+  const pluginDir = resolveAgents(ctx, config).pluginDir;
+  if (pluginDir) args.push("--plugin-dir", pluginDir);
   if (ctx) args.push("--settings", JSON.stringify(runnerSettings({ ctx, config, role })));
   args.push("--setting-sources", config.settingSources ?? "user");
   args.push(...(config.extraArgs ?? []));
@@ -340,6 +434,8 @@ export function implementerPrompt({ g, node, round, base, branch, feedback, note
     `- 仕様書: ${node.spec || g.spec}`,
     `- このノードの受入基準・業務ルール: ${node.acceptance.join(", ") || "（なし）"}`,
     `- 変更してよいパス（owns）: ${node.owns.join(", ")}`,
+    node.allowTestRemoval?.length ? `- 削除してよいテストファイル（allowTestRemoval）: ${node.allowTestRemoval.join(", ")}` : "",
+    "- ファイルを削除するときは \`git rm <パス>\`（フォルダごとなら \`git rm -r <パス>\`）を使います。rm・mv は使えません。テストのファイルは、上の「削除してよいテストファイル」にあるものだけ削除できます（中身を空にするのではなく、ファイルごと削除する）。",
     resume ? "- 前回の試行が中断した続きです。git log と git status で、どこまで進んでいたかを確かめてから始めてください。" : "",
     "",
     "goal（これを満たして終える）:",

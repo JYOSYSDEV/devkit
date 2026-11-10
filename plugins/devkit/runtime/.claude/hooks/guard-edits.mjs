@@ -11,13 +11,23 @@ import {
   isProtectedPath,
   isProtectedStateFile,
   isSharedPath,
-  isTestPath,
+  isTestish as testish,
   READ_ONLY_ROLES,
   repoRelative,
   WEAKEN_PATTERNS,
   WORKER_AGENTS,
   weakeningOf,
 } from "../../scripts/devkit/shared.mjs";
+import { matchesAny } from "../../scripts/devkit/lib/util.mjs";
+
+function allowRemoval() {
+  try {
+    const v = JSON.parse(process.env.DEVKIT_ALLOW_TEST_REMOVAL ?? "null");
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string" && x) : [];
+  } catch {
+    return [];
+  }
+}
 
 // ランナーが起動した AI の役割（DEVKIT_ROLE）。レビュー・再計画の担当は読み取り専用
 const ROLE = process.env.DEVKIT_ROLE ?? "";
@@ -134,9 +144,12 @@ if (isProtectedStateFile(rel)) {
 }
 
 // 3. テストの弱体化（skip / only / todo・別名の追加、テストケースや expect の減少）。テストの準備のファイルも同じ
-const isTestish = isTestPath(rel) || /(^|\/)(vitest|playwright)\.setup\.|^tests\/setup|^e2e\/(fixtures|global-setup|global-teardown)/.test(rel);
+const isTestish = testish(rel);
 if (isTestish) {
   const problems = weakeningOf(before, after);
+  // 計画で削除が許されているテスト（allowTestRemoval）: 空にしたり減らしたりせず、ファイルごと削除する（機械検証は、実際に削除された場合だけ許す）
+  if (problems.length && ROLE === "implementer" && matchesAny(rel, allowRemoval()))
+    block(`${rel} は、計画で削除が許されているテスト（allowTestRemoval）。中身を減らしたり空にしたりせず、Bash の \`git rm ${rel}\` でファイルごと削除する。`);
   if (problems.length)
     block(
       `テストを弱める変更は禁止（${problems.join("・")}）。失敗するなら実装を直す。テストが仕様と食い違うなら変更せず報告する（ランナーの作業なら構造化出力の needs か request、対話なら利用者に相談）。`,

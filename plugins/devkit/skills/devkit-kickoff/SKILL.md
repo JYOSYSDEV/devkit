@@ -58,7 +58,7 @@ argument-hint: "[作りたいもの・やりたいこと]"
 - 並列に走りうるノード同士の `owns` を重ねない。共有ファイル・保護されたパス（`pnpm -s devkit shared`）は owns にできない。依存パッケージは `dependencies` に書く（許可リスト `docs/standard/dependencies.json` にあるものだけ）。
 - E2E でしか確かめられない AC を持つノードは `verify: "full"` にする（そのノードの検証でビルドと E2E を回す）。そうでなければ、その AC はマイルストーンの全体検証で照合される。
 - 外部の資格情報・費用・人の判断が着手前に要るノードは `before: ["technical"]` などを付ける。
-- 雛形の見本（todos）を消すノードは、基盤のマイルストーンに置き、消すテストを `allowTestRemoval` に書く。
+- 雛形の見本（todos）を消すノードは、基盤のマイルストーンに置き、消すテストを `allowTestRemoval` に書く（消すファイルは、テストも含めてそのノードの `owns` に入れる。実装担当は `git rm` で削除する）。
 - 各ノードの `goal` は `docs/devkit/goal-rules.md` のテンプレートで書く（終了状態・証明方法・制約・ターン上限）。
 - `limits`: `maxParallel` は 2〜3 から。`maxCycles` はノード数 × 2 程度。夜間に回すなら、業務ゲートが夜中に来て朝まで止まらないよう、マイルストーンの区切りを考える（必要なら `lookahead: true`。承認待ちの間も、次のマイルストーンの作業を先に進める。差し戻されると手戻りが増える）。
 - `branch` は `devkit/<slug>`。

@@ -64,7 +64,11 @@ private リポジトリなら、利用者の環境から GitHub に認証でき�
 | AI の作業（実装・レビュー・再計画） | 作業ディレクトリと取り出しをリポジトリの外（既定 `~/.cache/devkit/<案件>/work`）に作り、AI の Bash を Claude Code のサンドボックスで動かす（作業ディレクトリの外に書けない、ネットワークなし、使えなければ起動しない）。サンドボックスは Edit・Write には効かないので、実装担当の Edit・Write の書き込み先はガードが作業ディレクトリの中に限る（`aiSandbox: "off"` でも同じ） | `aiSandbox`（既定 `"required"`）、`workDir` |
 | 権限 | ランナーが役割ごとに渡す許可（`--allowedTools`）のほかは拒否する | `permissionMode`（既定 `dontAsk`。`auto` も可。`bypassPermissions` は受け付けない） |
 
-`.devkit/config.json` は人（標準オーナー）が手で書き、コミットする（Claude からは編集できない。CODEOWNERS の対象にする）。例:
+`.devkit/config.json` は人（標準オーナー）が手で書き、コミットする（Claude からは編集できない。CODEOWNERS の対象にする）。ファイルがなければ既定の設定で動く。作った・変えたあとは、コミットしないとランナーは起動しない。
+
+ランナーを起動する前に、`pnpm devkit doctor` で、起動時に止まりうること（コンテナのエンジン・AI のサンドボックス・AI の担当が見つかるか・未コミットの変更・記録の照合・人が編集するファイルの形・計画の承認）をまとめて確かめられる（何も書き換えない。Claude からも実行できる）。`pnpm devkit start` の後と、ランナーが起動時に止まったときにも、同じ検査の結果が出る。
+
+例:
 
 ```json
 {
@@ -82,7 +86,8 @@ private リポジトリなら、利用者の環境から GitHub に認証でき�
 
 | 項目 | 既定 | 説明 |
 | --- | --- | --- |
-| `isolation.engine` | `docker` | `podman` も使える（rootless は `--userns=keep-id` で動かす） |
+| `isolation.engine` | 自動 | 省略すると、Docker が使えれば Docker、だめなら Podman を使う（rootless の Podman は `--userns=keep-id` で動かす）。決めておくなら `"docker"` か `"podman"`（実行ファイルの名前かパス） |
+| `pluginDir` | 自動 | ランナーが起動する AI に渡す devkit プラグインのフォルダ（`--plugin-dir`）。省略すると、利用者の設定（`~/.claude/settings.json`）で devkit が有効ならそのまま、プロジェクトの設定でだけ有効なら、インストール済みのプラグインの場所（`~/.claude/plugins/installed_plugins.json`）を自動で渡す。相対パスは案件のルートから |
 | `isolation.image` | `@playwright/test` の版に合わせた `mcr.microsoft.com/playwright:v<版>-noble`（なければ `node:24-bookworm-slim`） | 社内のレジストリに置いたものを指定してよい。pnpm がなければ、インストールの段階で `packageManager` の版をキャッシュに入れる |
 | `isolation.installNetwork` | `bridge` | プロキシが `127.0.0.1` にある機械では `host`。`HTTP(S)_PROXY`・`NO_PROXY`・`NODE_EXTRA_CA_CERTS` はインストールの段階にだけ渡す（`passProxy: false` で渡さない） |
 | `isolation.memory` / `cpus` / `pids` | `6g` / 制限なし / `4096` | 1つの検証のコンテナの上限 |
@@ -242,7 +247,10 @@ devkit の人のコマンド（approve など）は、Claude Code の中から�
 | `計画が承認の後に変わっています` | `git log .devkit/graph.json docs/spec` で何が変わったかを確かめ、人が承認し直す |
 | `担当者として docs/profile.json の owners に載っていません` | git の `user.email` と owners を合わせる。代理なら `--delegate-of <本人> --note "<理由>"` |
 | `環境の問題で止まりました`（ログイン切れ・利用上限・コンテナのエンジン・イメージの取得） | 対処してから `pnpm devkit run`（試行には数えない） |
-| `検証用のコンテナ（docker）を使えません` | `docker version` が通るようにする（デーモンの起動、利用者を docker グループに入れる、Podman なら `isolation.engine: "podman"`） |
+| `検証用のコンテナ（docker・podman）を使えません` | `docker version` か `podman version` が通るようにする（デーモンの起動、利用者を docker グループに入れる）。エンジンを決めておくなら、人が `.devkit/config.json` に `{"isolation":{"engine":"podman"}}` のように書いてコミットする |
+| `devkit の担当（devkit:implementer など）が見つかりません`・`agent 'devkit:implementer' not found` | ランナーは利用者の設定だけを読んで AI を起動する。devkit プラグインを利用者の設定で有効にするか、人が `.devkit/config.json` に `pluginDir`（devkit プラグインのフォルダの絶対パス）を書いてコミットする。インストール済みのプラグインが見つかれば、自動で渡す |
+| `人が編集するファイルに、検証（pnpm verify）で落ちる問題があります` | `docs/exceptions.json`・`docs/profile.json` の JSON の誤りか、整形の違い（末尾の改行など）。`pnpm exec biome check --write <ファイル>` で直してコミットする。`docs/exceptions.json` を直したら、そのあとで `pnpm devkit seal accept` |
+| 起動のたびに別の理由で止まる | `pnpm devkit doctor` で、直すことをまとめて確かめる |
 | `AI のサンドボックスを使えません` | Linux なら `sudo apt-get install bubblewrap socat`。コンテナの中で回していて bubblewrap が動かないときは、ランナーを VM か実機で回す（`aiSandbox: "off"` は最後の手段） |
 | `保護されたファイルが、ランナーと人のコマンド以外から変わった` | `.devkit/reports/tamper-<時刻>.md` と `git diff` で何が変わったかを確かめる。正しい変更なら人がコミットし、そうでなければ `git checkout -- <ファイル>` で戻す。隔離の設定（`aiSandbox`・`isolation.mode`）を確かめてから `pnpm devkit run` |
 | `devkit のコマンドの記録と合わない未コミットの変更があります` | 上と同じ。人が手で `.devkit/` や `docs/decisions.md` を編集した場合も出る（人の判断は devkit のコマンドで残す） |
@@ -250,7 +258,7 @@ devkit の人のコマンド（approve など）は、Claude Code の中から�
 | Supervisor が `limit_stop`・`env_stop`・`policy_stop` | `pnpm devkit supervisor status` で理由を見る。原因（上限・ログイン切れ・環境・記録の不整合）を直してから、標準オーナーが端末で `pnpm devkit supervisor clear --role 技術 --note "<直したこと>"` |
 | Supervisor が判断の後に再開しない | `pnpm devkit supervisor status` の「次の照合での判断」を見る（一時停止中・時間帯の外・再試行の待ち・計画の承認待ち・作業がない、など）。手動停止（`manual_stop`）なら解除が要る |
 | ブリーフィングが届かない | `pnpm devkit supervisor status` の配信の状況。`no_target` は送り先の環境変数がない（`DEVKIT_NOTIFY_CMD`）。`failed` でも `.devkit/briefings/` に保存されている |
-| `Claude Code の中からは実行できません` | 人のコマンドは Claude Code の外の端末で実行する（Claude Code の `!` や、Claude Code から開いた端末も断る） |
+| `Claude Code の中からは実行できません` | 人のコマンドは、Claude Code を動かしているのとは別の端末で実行する（Claude Code の入力欄の `!` や、Claude Code から開いた端末も断る） |
 | `開始時点のコードで検証が通りません` | 統合ブランチで `pnpm verify` を手で実行して直す（雛形・環境・ブラウザ） |
 | `別のランナーが実行中です` | 二重起動の防止。落ちたランナーのロックは、プロセスがなく、ハートビートが途絶えていれば次の起動で外れる |
 | 同じ作業が何度も不合格 | `pnpm devkit logs` と `.devkit/state.json` の history を見る。goal があいまいなら計画を直して承認し直す。`devkit-diagnose` で調べる |

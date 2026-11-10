@@ -107,7 +107,7 @@ export function requireHuman(what, { detail = "" } = {}) {
   const claude = claudeMarkers();
   if (claude)
     fail(
-      `${what} は人が端末で実行するコマンドです。Claude Code の中からは実行できません（${claude}）。Claude Code の外の端末で \`pnpm devkit ${what}\` を実行してください。`,
+      `${what} は人が端末で実行するコマンドです。Claude Code の中からは実行できません（${claude}。入力欄の ! で実行しても同じです）。Claude Code を動かしているのとは別の端末で \`pnpm devkit ${what}\` を実行してください。`,
       5,
     );
   if (!process.stdin.isTTY && process.env.DEVKIT_HUMAN_TTYLESS !== "1")

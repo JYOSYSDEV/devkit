@@ -14,7 +14,7 @@ counts[key] = (counts[key] ?? 0) + 1;
 writeFileSync(counterFile, JSON.stringify(counts));
 const callLog = `${process.env.DEVKIT_FAKE_SCENARIO}.calls.log`;
 writeFileSync(callLog, `${key}#${counts[key]} cwd=${process.cwd()} args=${process.argv.slice(2).filter((a) => a.startsWith("--")).join(" ")}\n`, { flag: "a" });
-writeFileSync(`${process.env.DEVKIT_FAKE_SCENARIO}.args.jsonl`, `${JSON.stringify({ key, n: counts[key], cwd: process.cwd(), workdir: process.env.DEVKIT_WORKDIR ?? null, apiKey: Boolean(process.env.ANTHROPIC_API_KEY), argv: process.argv.slice(2) })}\n`, { flag: "a" });
+writeFileSync(`${process.env.DEVKIT_FAKE_SCENARIO}.args.jsonl`, `${JSON.stringify({ key, n: counts[key], cwd: process.cwd(), workdir: process.env.DEVKIT_WORKDIR ?? null, owns: process.env.DEVKIT_OWNS ?? null, allowRemoval: process.env.DEVKIT_ALLOW_TEST_REMOVAL ?? null, apiKey: Boolean(process.env.ANTHROPIC_API_KEY), argv: process.argv.slice(2) })}\n`, { flag: "a" });
 
 const steps = scenario[key] ?? scenario[role] ?? [];
 const step = steps[Math.min(counts[key] - 1, steps.length - 1)] ?? {};

@@ -138,6 +138,11 @@ export function isTestPath(rel) {
   return /\.(test|spec)\.[cm]?[jt]sx?$/.test(rel) || /^e2e\//.test(rel) || /^tests\//.test(rel);
 }
 
+// テストと、テストの準備のファイル（弱める変更・削除を確かめる対象。ガードと機械検証が共用する）
+export function isTestish(rel) {
+  return isTestPath(rel) || /(^|\/)(vitest|playwright)\.setup\.|^tests\/setup|^e2e\/(fixtures|global-setup|global-teardown)/.test(rel);
+}
+
 // start から上にたどって .git を探す。.git がファイルなら git worktree（ワーカー用の隔離作業ツリーなど）。
 // 戻り値: { root, linked } または null
 export function findRepoRoot(start) {

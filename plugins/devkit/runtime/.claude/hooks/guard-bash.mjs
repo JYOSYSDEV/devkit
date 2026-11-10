@@ -13,10 +13,11 @@
 //   - 読み取り専用の役割（レビュー・再計画など）: 読むだけのコマンドに限り、コマンド置換・プロセス置換は使わせない
 //   - ランナーが起動した実装担当: 書き込み先は作業ディレクトリ（DEVKIT_WORKDIR）の中だけ
 // exit 2 + stderr で Claude に理由を返す。ガードは補助で、合否はランナーの機械検証が決める。
+import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { globToRegExp } from "../../scripts/devkit/lib/util.mjs";
-import { findRepoRoot, isNestedWorktree, isProtectedPath, isProtectedStateFile, isSharedPath, READ_ONLY_ROLES, WORKER_AGENTS } from "../../scripts/devkit/shared.mjs";
+import { globToRegExp, matchesAny } from "../../scripts/devkit/lib/util.mjs";
+import { findRepoRoot, isNestedWorktree, isProtectedPath, isProtectedStateFile, isSharedPath, isTestish, READ_ONLY_ROLES, WORKER_AGENTS } from "../../scripts/devkit/shared.mjs";
 
 // ランナーが起動した AI の役割（DEVKIT_ROLE）
 const ROLE = process.env.DEVKIT_ROLE ?? "";
@@ -50,6 +51,19 @@ function real(p) {
 // 実装担当の作業ディレクトリ（ランナーが DEVKIT_WORKDIR で渡す。なければ今の作業ツリー）。書き込み先はこの中だけ
 const WORK = ROLE === "implementer" ? real(process.env.DEVKIT_WORKDIR || repo?.root || cwd) : null;
 const ROOT = WORK ?? repo?.root ?? cwd;
+// 実装担当のノードの定義（ランナーが渡す。フックの環境は claude のもので、AI のコマンドからは変えられない）。
+//   DEVKIT_OWNS: 変更してよいパス（なければ owns では絞らない。合否は機械検証が決める）
+//   DEVKIT_ALLOW_TEST_REMOVAL: 削除してよいテストファイル（計画の allowTestRemoval。なければ、テストは削除できない）
+function globList(name) {
+  try {
+    const v = JSON.parse(process.env[name] ?? "null");
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string" && x) : null;
+  } catch {
+    return null;
+  }
+}
+const OWNS = globList("DEVKIT_OWNS");
+const ALLOW_REMOVAL = globList("DEVKIT_ALLOW_TEST_REMOVAL") ?? [];
 const isWorker = Boolean(ROLE) || WORKER_AGENTS.has(String(input.agent_type ?? "")) || (isNestedWorktree(repo) && !process.env.DEVKIT_MAIN_SESSION);
 
 const HUMAN_MSG =
@@ -727,8 +741,10 @@ function check(text, dir, depth) {
           if (protectedTarget(rel) || protectedDir(rel)) block(`${rel} へのリンクは作らない（devkit が管理するファイル・場所、.git の中）。`);
         }
       }
-      if (ROLE === "implementer" && ["sed", "perl", "rm", "mv", "truncate", "patch"].includes(prog) && targets.some((a) => /(\.test\.|\.spec\.|^e2e\/|^tests\/)/.test(relOf(here, a) ?? "")))
-        block(`${prog} でテストファイルを書き換え・削除しない。テストの変更は Edit で行う（弱める変更はガードと機械検証が止める）。`);
+      // テストファイルの書き換え・削除。削除だけは、計画の allowTestRemoval にあるファイルなら通す（雛形の見本を消すノード）
+      const removable = (a) => prog === "rm" && !/[*?[{]/.test(a) && matchesAny(relOf(here, a) ?? "", ALLOW_REMOVAL);
+      if (ROLE === "implementer" && ["sed", "perl", "rm", "mv", "truncate", "patch"].includes(prog) && targets.some((a) => /(\.test\.|\.spec\.|^e2e\/|^tests\/)/.test(relOf(here, a) ?? "") && !removable(a)))
+        block(`${prog} でテストファイルを書き換え・削除しない。テストの変更は Edit で行う（弱める変更はガードと機械検証が止める）。計画の allowTestRemoval にあるテストファイルの削除は \`git rm <パス>\` で行う。`);
     }
     if (ROLE && (prog === "patch" || (prog === "git" && ["apply", "am"].includes(args.find((a) => !a.startsWith("-")) ?? ""))))
       block("ランナーが起動した AI は patch・git apply を使わない。変更は Edit / Write で行う。");
@@ -838,6 +854,28 @@ function shortWith(a, ch, { not = "" } = {}) {
   if (not && not.includes(a[1])) return null;
   const at = a.indexOf(ch, 1);
   return at < 0 ? null : a.slice(at + 1);
+}
+
+// 実装担当の git rm: 消えるファイルを git に聞いて（ディレクトリ・glob を解く）、1つずつ確かめる。
+//   - 作業ディレクトリの中で、保護されたファイル・共有ファイルではない
+//   - ノードの owns の中（ランナーが渡したとき）
+//   - テストのファイルは、計画の allowTestRemoval にあるものだけ（機械検証も同じ一覧で、実際に削除された場合だけ許す）
+function checkRemoval(base, args) {
+  const say = (why) => block(`git rm: ${why}。`);
+  if (base === null) say("場所が分からない（変数など）ので、消すファイルを確かめられない。作業ディレクトリからの相対パスで書く");
+  if (args.some((a) => /^--pathspec-from-file(=|$)/.test(a))) say("--pathspec-from-file は使わない（消すファイルをそのまま書く）");
+  const specs = positionals(args, []);
+  if (!specs.length) return;
+  if (specs.some((p) => p.startsWith(":") || /\$|`/.test(p))) say("pathspec の特別な書き方（:(…)・:!）や変数は使わない（消すファイル・フォルダをそのまま書く）");
+  for (const p of specs) checkWrite(base, p, { what: "git rm での削除" });
+  const r = spawnSync("git", ["ls-files", "-z", "--full-name", "--", ...specs], { cwd: base, encoding: "utf8", timeout: 10_000, maxBuffer: 16 * 1024 * 1024 });
+  if (r.status !== 0) say("消すファイルを確かめられなかった（git ls-files が失敗した）");
+  for (const f of r.stdout.split("\0").filter(Boolean)) {
+    if (protectedTarget(f)) say(`${f} は作業（ノード）では変更できないファイル（仕様・標準・共有ファイル・テストの設定と準備）。必要なら報告の needs に書く`);
+    if (OWNS && !matchesAny(f, OWNS)) say(`${f} はこのノードの owns（${OWNS.join(", ")}）の外。必要なら報告の needs に書く`);
+    if (isTestish(f) && !matchesAny(f, ALLOW_REMOVAL))
+      say(`${f} はテストのファイルで、計画の allowTestRemoval にない（${ALLOW_REMOVAL.length ? `削除してよいのは ${ALLOW_REMOVAL.join(", ")}` : "このノードに、削除してよいテストはない"}）。テストは削除せず、仕様と食い違うなら報告する`);
+  }
 }
 
 const GIT_EXEC_MSG =
@@ -999,6 +1037,7 @@ function checkGit(argsAll, seg, here, tk = { reads: [], herestrings: [], heredoc
   }
   if (ROLE === "implementer" && ["switch", "checkout", "reset", "rebase", "merge", "worktree", "config", "remote", "fetch", "pull", "push", "tag", "update-ref", "symbolic-ref", "filter-branch", "replace", "apply", "am", "clone", "init", "submodule", "bisect", "checkout-index", "read-tree", "update-index"].includes(sub))
     block(`ランナーの作業ディレクトリでは git ${sub} を使わない（ブランチ・履歴・設定はランナーが管理する）。ファイルを変更するところまでにする。`);
+  if (ROLE === "implementer" && sub === "rm") checkRemoval(base, args);
   if (["checkout", "restore", "rm", "mv", "apply", "stash"].includes(sub)) {
     for (const a of positionals(args, ["-s", "--source", "-m", "--message", "--pathspec-from-file"])) {
       const rel = relOf(base, a);

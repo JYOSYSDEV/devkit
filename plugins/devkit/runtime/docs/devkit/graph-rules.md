@@ -65,7 +65,7 @@
 | `acceptance` | この作業が満たす AC・BR。仕様書のすべての AC・BR が、ちょうど1つの作業に割り当たること（`check` が確かめる）。ランナーは、番号を名前に含み、実行されて合格したテストで照合する |
 | `verify` | `standard`（既定。`verify` を実行）か `full`（`verifyFull` を実行し、E2E の AC もこの作業で照合する） |
 | `before` | 着手の前に承認が要る役割（外部の資格情報・費用・人の判断が要る作業） |
-| `allowTestRemoval` | 削除してよいテストファイル（基盤のマイルストーンで、雛形の見本を消すときだけ） |
+| `allowTestRemoval` | 削除してよいテストファイル（基盤のマイルストーンで、雛形の見本を消すときだけ）。そのノードの `owns` にも入れる。実装担当は `git rm` でファイルごと削除する（ガードと機械検証は、この一覧にあるテストの削除だけを通す） |
 
 graph.json に実行の状態（`status`・`attempts`）や承認（`approved`）は書きません（`check` がエラーにする）。状態は `.devkit/state.json`、承認は `.devkit/controls.json` に devkit が記録します。
 

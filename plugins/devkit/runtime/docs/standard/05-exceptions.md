@@ -43,8 +43,10 @@
 ## 例外の承認（標準オーナー）
 
 1. `docs/adr/` に ADR を1枚書く（`docs/adr/_template.md`。背景・決定・検討した選択肢・影響・見直す時期）
-2. `docs/exceptions.json` に例外を登録する
+2. `docs/exceptions.json` に例外を登録する。登録は、標準オーナーが端末で `pnpm devkit exception add --rules <ID,…> --subject <対象> --reason "<理由>" --adr <ADR のパス> --review-by YYYY-MM-DD --role 技術` を実行する（登録・判断の記録・コミットを一度に行う。手順は `/devkit:devkit-standard-exception`）
 3. 標準チェッカーは、登録された例外の対象を違反として扱わない
+
+`docs/exceptions.json` を手で編集した場合は、ランナーが起動の前に「devkit のコマンドとランナーが書いたものではない内容の記録」として止める（改ざんと区別できないため）。内容を確かめてコミットし、標準オーナーが端末で `pnpm devkit seal accept --role 技術 --note "<確かめたこと>"` を実行する。手で書くときは Biome の整形（末尾の改行など）にも合わせる（合っていないと `pnpm verify` が落ちる。`pnpm devkit doctor` で先に確かめられる）。
 
 例外の記録には次の項目が必須（**ESC-06**）。欠けている例外は適用されず、ESC-06 の違反として表示される。
 

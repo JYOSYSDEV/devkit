@@ -11,9 +11,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeRole, ROLE_LABEL, ROLE_PERSON } from "../shared.mjs";
-import { finalReviewerPrompt, implementerPrompt, replannerPrompt, reviewerPrompt, runAgent } from "./agents.mjs";
+import { agentsProblem, finalReviewerPrompt, implementerPrompt, replannerPrompt, reviewerPrompt, runAgent } from "./agents.mjs";
+import { diagnose, doctorText, humanFileProblems } from "./doctor.mjs";
 import { commitArgs, currentBranch, dirtyFiles, git, headSha } from "./git.mjs";
-import { cleanupContainers, engineInfo, ensureImage, imageFor, isolationConfig, projectKey } from "./isolation.mjs";
+import { cleanupContainers, engineInfo, engineName, engineProblem, ensureImage, imageFor, isolationConfig, projectKey } from "./isolation.mjs";
 import {
   applyHumanDecisions,
   classifyPlanChange,
@@ -41,6 +42,7 @@ import {
 import { appendEvent } from "./events.mjs";
 import { notify } from "./notify.mjs";
 import { writeGateReport, writeRunReport, writeStatusHtml } from "./report.mjs";
+import { sandboxProblem } from "./sandbox.mjs";
 import { committedUnexplained, journal, journalProblem, Seal, uncommittedUnexplained } from "./seal.mjs";
 import { acquireLock, appendProgress, RunInfo, releaseLock } from "./status.mjs";
 import { fail, localStamp, nowIso, readJson, readText, writeJson, writeText } from "./util.mjs";
@@ -98,18 +100,7 @@ export function parseRunLimits(opts = {}) {
   return out;
 }
 
-// Claude Code のサンドボックスが使えるか（aiSandbox: required のとき）
-export function sandboxProblem(config) {
-  if (config.aiSandbox !== "required") return null;
-  if (process.platform === "win32") return "Windows ネイティブでは Claude Code のサンドボックスを使えません。WSL2 で動かすか、.devkit/config.json の aiSandbox を off にしてください";
-  if (process.platform === "linux") {
-    for (const bin of ["bwrap", "socat"]) {
-      if (spawnSync("sh", ["-c", `command -v ${bin}`], { encoding: "utf8" }).status !== 0)
-        return `${bin} がありません（sudo apt-get install bubblewrap socat）。入れられない場合は .devkit/config.json の aiSandbox を off にしてください（AI のコマンドが作業ディレクトリの外にも書けるようになります）`;
-    }
-  }
-  return null;
-}
+export { sandboxProblem };
 
 class Runner {
   constructor(ctx, opts) {
@@ -234,14 +225,16 @@ class Runner {
           `git log -p -- ${committed[0]} で誰が何を変えたかを確かめ、改ざんなら戻してください。正しい内容なら、標準オーナーが端末で pnpm devkit seal accept --role 技術 --note "<確かめたこと>" を実行します`,
         EXIT.tamper,
       );
+    // 人が手で書くファイルの形。コンテナの検証（イメージの取得と依存のインストールの後）まで進んでから落ちないように、ここで確かめる
+    const fp = humanFileProblems(ctx);
+    if (fp.length) fail(`人が編集するファイルに、検証（pnpm verify）で落ちる問題があります:\n${fp.map((x) => `  - ${x}`).join("\n")}\n直してコミットしてください（docs/exceptions.json を直したら、そのあとで標準オーナーが端末で pnpm devkit seal accept --role 技術 --note "<確かめたこと>"）`);
     if (!existsSync(ctx.checker)) fail("標準チェッカー（scripts/standard/check.mjs）がありません。/devkit:update で実行部品を入れ直してください");
     const sb = sandboxProblem(config);
     if (sb) fail(`AI のサンドボックスを使えません: ${sb}`);
-    const iso = isolationConfig(config);
-    if (iso.mode === "container") {
-      const info = engineInfo(iso);
-      if (!info.ok) fail(`検証用のコンテナ（${iso.engine}）を使えません: ${info.reason}。Docker か Podman を動かすか、隔離なしで回すなら人が .devkit/config.json の isolation.mode を none にします（推奨しない）`, EXIT.env);
-    }
+    const ap = agentsProblem(ctx, config);
+    if (ap) fail(ap, EXIT.env);
+    const ep = engineProblem(config);
+    if (ep) fail(ep, EXIT.env);
     const lock = acquireLock(ctx);
     if (lock !== true) fail(`別のランナーが実行中です（pid ${lock.busy?.pid}、${lock.busy?.host ?? ""}）。状況は pnpm devkit status`, EXIT.busy);
     return "ok";
@@ -270,6 +263,14 @@ class Runner {
     } catch (e) {
       if (!this.opts.quiet) console.error(`[devkit run] ${e.message}`);
       const code = [EXIT.busy, EXIT.env, EXIT.tamper].includes(e.code) ? e.code : EXIT.preflight;
+      // 止まる理由は1つずつしか出ないので、起動前の検査（pnpm devkit doctor と同じ）で、ほかに直すことをまとめて示す
+      if (!this.opts.quiet && code !== EXIT.busy) {
+        try {
+          const others = diagnose(this.ctx, this.config).filter((x) => x.level === "problem");
+          if (others.length > 1 || (others.length === 1 && !String(e.message).includes(others[0].detail.slice(0, 40))))
+            console.error(`\n[devkit run] 起動前の検査で見つかった、直すこと（まとめて確かめるには pnpm devkit doctor）:\n${doctorText(others)}`);
+        } catch {}
+      }
       if (code !== EXIT.busy) appendEvent(this.ctx, "run_refused", { run: this.stamp, pid: process.pid, code, reason: String(e.message).slice(0, 2000) }, `run:${this.stamp}:${process.pid}:refused`);
       return code;
     }
@@ -290,7 +291,7 @@ class Runner {
     process.on("SIGTERM", onSignal);
     let code = EXIT.ok;
     try {
-      this.log(`ランナー開始（pid ${process.pid}${this.limits.until ? `、${this.limits.until.text} まで` : ""}、検証: ${isolationConfig(this.config).mode === "container" ? "コンテナ" : "隔離なし"}、AI のサンドボックス: ${this.config.aiSandbox}）`);
+      this.log(`ランナー開始（pid ${process.pid}${this.limits.until ? `、${this.limits.until.text} まで` : ""}、検証: ${isolationConfig(this.config).mode === "container" ? `コンテナ（${engineName(isolationConfig(this.config))}）` : "隔離なし"}、AI のサンドボックス: ${this.config.aiSandbox}）`);
       await this.notify(null, "ランナーを開始しました");
       await this.recover();
       if (!this.stop) await this.baseline();
@@ -637,7 +638,8 @@ class Runner {
         logFile: join(this.logDir, `c${this.s.cycle}-${name}-r${round}-implementer.jsonl`),
         timeoutMs: g.limits.taskTimeoutMinutes * 60_000,
         budgetUsd: this.config.budgetUsd?.implementer ?? g.limits.taskBudgetUsd,
-        env: { DEVKIT_NODE: n.id },
+        // ガードが、削除（git rm）の対象を確かめるのに使う
+        env: { DEVKIT_NODE: n.id, DEVKIT_OWNS: JSON.stringify(n.owns ?? []), DEVKIT_ALLOW_TEST_REMOVAL: JSON.stringify(n.allowTestRemoval ?? []) },
       });
       this.usage(impl);
       if (this.checkSeal()) return finishNode("pending", { resume: true });
