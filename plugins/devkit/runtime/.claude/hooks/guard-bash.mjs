@@ -14,10 +14,10 @@
 //   - ランナーが起動した実装担当: 書き込み先は作業ディレクトリ（DEVKIT_WORKDIR）の中だけ
 // exit 2 + stderr で Claude に理由を返す。ガードは補助で、合否はランナーの機械検証が決める。
 import { spawnSync } from "node:child_process";
-import { lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { globToRegExp, matchesAny } from "../../scripts/devkit/lib/util.mjs";
-import { findRepoRoot, isNestedWorktree, isProtectedPath, isProtectedStateFile, isSharedPath, isTestish, READ_ONLY_ROLES, WORKER_AGENTS } from "../../scripts/devkit/shared.mjs";
+import { bashMarkerDir, bashMarkerName, findRepoRoot, isNestedWorktree, isProtectedPath, isProtectedStateFile, isSharedPath, isTestish, READ_ONLY_ROLES, WORKER_AGENTS } from "../../scripts/devkit/shared.mjs";
 
 // ランナーが起動した AI の役割（DEVKIT_ROLE）
 const ROLE = process.env.DEVKIT_ROLE ?? "";
@@ -67,7 +67,7 @@ const ALLOW_REMOVAL = globList("DEVKIT_ALLOW_TEST_REMOVAL") ?? [];
 const isWorker = Boolean(ROLE) || WORKER_AGENTS.has(String(input.agent_type ?? "")) || (isNestedWorktree(repo) && !process.env.DEVKIT_MAIN_SESSION);
 
 const HUMAN_MSG =
-  "承認・差し戻し・回答・再計画の案の承認・標準の例外・上限の追加・判断の記録・記録の受け入れ（seal accept）・Supervisor の停止の解除（supervisor clear）は、人が Claude Code の外の端末で行う。Claude からは実行しない。利用者に、端末で `pnpm devkit <コマンド>` を実行するよう伝える。";
+  "承認・差し戻し・回答・再計画の案の承認・標準の例外・上限の追加・判断の記録・記録の受け入れ（seal accept）・Supervisor の停止の解除（supervisor clear）は、人が行う。Claude からは実行しない。利用者に、端末で `pnpm devkit <コマンド>` を実行するか、Claude Code の入力欄で `! pnpm devkit <コマンド>` と打つよう伝える。";
 
 // ---- 0. 全体に対する確認 ----
 
@@ -416,6 +416,7 @@ function codeScan(code) {
   if (/devkit(\.mjs)?["'`]?[\s,'"`]+(?:["'`]?--["'`]?[\s,]+)?["'`]?(approve|reject|answer|record|proposal|exception|seal["'`]?[\s,]+["'`]?accept|supervisor["'`]?[\s,]+["'`]?clear)\b/.test(code) || /add-cycles/.test(code)) block(HUMAN_MSG);
   if (/(controls|state|config|run)\.json|journal\.jsonl|decisions\.md|exceptions\.json/.test(code) && /\.devkit|decisions|exceptions/.test(code) && CODE_WRITES.test(code))
     block("インタプリタのコードから devkit が管理するファイルを書き換えない。");
+  if (/claude-bash/.test(code) && CODE_WRITES.test(code)) block("インタプリタのコードから、devkit が Claude のコマンドの実行中を記録する場所を書き換えない。");
   if (/\.git[\\/](config|hooks)|docs[\\/]standard|scripts[\\/](devkit|standard)/.test(code) && CODE_WRITES.test(code)) block("インタプリタのコードから .git の中・社内標準・devkit 自身を書き換えない。");
   // ランナーの実装担当: インタプリタのコードではファイルを書かない・コマンドを起動しない（書き込み先を確かめられない。Edit・Write を使う）
   if (WORK && /writeFile|appendFile|createWriteStream|open\s*\([^)]*["'][wax+]|\.write\s*\(|rename|unlink|rmSync|rmdir|copyFile|cpSync|symlink|truncate|chmod|child_process|spawn|exec|system\s*\(|popen|subprocess|`/.test(code))
@@ -582,7 +583,8 @@ function protectedDir(rel) {
 const SCRATCH = /^\/dev\/(null|stdout|stderr|tty|fd\/\d+)$/;
 
 // 書き込み先の確かめ（リダイレクト・ファイルを書き換えるコマンド・git の書き込みのオプションが共用する）
-function checkWrite(dir, target, { isDir = false, what = "書き込み" } = {}) {
+const MARKERS = realish(bashMarkerDir());
+function checkWrite(dir, target, { isDir = false, what = "書き込み", removes = false } = {}) {
   if (target === undefined || target === null || target === "" || target === "-") return;
   const t = String(target);
   if (SCRATCH.test(t)) return;
@@ -592,6 +594,12 @@ function checkWrite(dir, target, { isDir = false, what = "書き込み" } = {}) 
   const rel = relOf(dir, t, { asDir: isDir });
   if (isDir ? protectedDir(rel) : protectedTarget(rel))
     block(`${rel ?? t} への${what}はしない（devkit が管理するファイル・.git の中・作業では変更できないファイル${isDir ? "、またはそれを含む場所" : ""}）。`);
+  // Claude の Bash が実行中であることの目印（人のコマンドを ! から受け付けるときに使う）は、Claude のコマンドでは書き換えない
+  {
+    const abs = absOf(dir, t);
+    if (abs !== null && (insideDir(MARKERS, abs) || (removes && insideDir(abs, MARKERS)))) block(`${t} への${what}はしない（devkit が、Claude のコマンドの実行中を記録する場所）。`);
+    if (abs === null && /claude-bash/.test(t)) block(`${t} への${what}はしない（devkit が、Claude のコマンドの実行中を記録する場所）。`);
+  }
   if (WORK) {
     const abs = absOf(dir, t);
     if (abs === null || !insideDir(WORK, abs))
@@ -732,7 +740,7 @@ function check(text, dir, depth) {
       }
       if (["sed", "awk", "gawk"].includes(prog) && !inPlace) targets = [];
       if (["sed", "perl"].includes(prog)) targets = targets.slice(prog === "sed" && !args.some((a) => a === "-e" || a === "-f") ? 1 : 0);
-      if (inPlace) for (const a of targets) checkWrite(here, a, { what: `${prog} での書き込み` });
+      if (inPlace) for (const a of targets) checkWrite(here, a, { what: `${prog} での書き込み`, removes: ["rm", "rmdir", "mv", "shred"].includes(prog) });
       // リンクの先: 保護されたファイル・場所へのリンクを作らない（リンクを通して書けるため）
       if (prog === "ln") {
         const srcs = args.filter((a) => !a.startsWith("-")).slice(0, -1);
@@ -778,7 +786,7 @@ function check(text, dir, depth) {
           check(sub.map((x) => `'${String(x).replaceAll("'", "'\\''")}'`).join(" "), here, depth + 1);
         } else if (/^-(fprint|fprint0|fls)$/.test(a)) checkWrite(here, args[++k], { what: "find の書き込み" });
         else if (a === "-fprintf") checkWrite(here, args[++k], { what: "find の書き込み" });
-        else if (a === "-delete") for (const st of starts.length ? starts : ["."]) checkWrite(here, st, { what: "find -delete での削除" });
+        else if (a === "-delete") for (const st of starts.length ? starts : ["."]) checkWrite(here, st, { what: "find -delete での削除", removes: true });
       }
     }
 
@@ -1063,4 +1071,26 @@ function checkGit(argsAll, seg, here, tk = { reads: [], herestrings: [], heredoc
 }
 
 check(command, cwd, 0);
+
+// 通したコマンドは、実行中の目印を残す（メインのセッションとそのサブエージェント。ランナーの AI は、人のコマンドを別の方法で断る）。
+// 人のコマンド（承認など）は、Claude Code の入力欄の ! からなら受け付けるが、この目印がある間は断る
+// （Claude の Bash からの実行と見分けるため）。終わったら bash-done.mjs が消す。消されなかった目印は、期限で無効になる
+if (!ROLE) {
+  try {
+    const dir = bashMarkerDir();
+    mkdirSync(dir, { recursive: true });
+    const now = Date.now();
+    for (const f of readdirSync(dir)) {
+      try {
+        if (JSON.parse(readFileSync(join(dir, f), "utf8")).until < now) rmSync(join(dir, f), { force: true });
+      } catch {
+        rmSync(join(dir, f), { force: true });
+      }
+    }
+    const bg = Boolean(input.tool_input?.run_in_background);
+    const timeout = Math.min(Math.max(Number(input.tool_input?.timeout) || 120_000, 1_000), 600_000);
+    const until = now + (bg ? 600_000 : timeout + 5_000);
+    writeFileSync(join(dir, bashMarkerName(input.session_id, input.tool_use_id)), JSON.stringify({ at: now, until, background: bg, cwd, command: command.slice(0, 200) }));
+  } catch {}
+}
 process.exit(0);

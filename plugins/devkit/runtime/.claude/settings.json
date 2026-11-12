@@ -192,6 +192,19 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/bash-done.mjs"
+            ],
+            "timeout": 10
+          }
+        ]
       }
     ]
   }

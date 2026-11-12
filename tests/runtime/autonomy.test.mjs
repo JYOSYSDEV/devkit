@@ -113,7 +113,7 @@ test("着手前の承認は、ノードの定義に紐づく。再計画で定�
 test("記録の受け入れと Supervisor の停止の解除は、Claude からは実行できない", () => {
   const HOOK = join(RUNTIME, ".claude", "hooks", "guard-bash.mjs");
   const run = (command) =>
-    spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: process.cwd(), tool_name: "Bash", tool_input: { command } }), encoding: "utf8", env: Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEVKIT_"))) }).status;
+    spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ cwd: process.cwd(), tool_name: "Bash", tool_input: { command } }), encoding: "utf8", env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEVKIT_"))), DEVKIT_TEST_CLOCK: "1", DEVKIT_TEST_BASH_MARKERS: join(tmpdir(), "devkit-test-markers") } }).status;
   for (const c of ["pnpm devkit seal accept --role 技術 --note x", "pnpm devkit supervisor clear --role 技術 --note x", "node scripts/devkit/devkit.mjs seal accept", 'node -e "require(\'child_process\').execSync(\'pnpm devkit supervisor clear\')"'])
     assert.equal(run(c), 2, c);
   for (const c of ["pnpm devkit seal", "pnpm devkit supervisor status", "pnpm devkit briefing --print"]) assert.equal(run(c), 0, c);
@@ -122,7 +122,7 @@ test("記録の受け入れと Supervisor の停止の解除は、Claude から�
 // ---------- 段階1: 定時ブリーフィング ----------
 
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { hostname } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { cleanEnv, implFiles } from "./helpers.mjs";
 

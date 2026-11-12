@@ -187,7 +187,7 @@ symlinkSync(".devkit", join(root, "dl"));
 
 function hook(name, input, env = {}) {
   const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEVKIT_")));
-  const r = spawnSync(process.execPath, [join(HOOKS, name)], { input: JSON.stringify({ cwd: root, ...input }), encoding: "utf8", env: { ...clean, ...env } });
+  const r = spawnSync(process.execPath, [join(HOOKS, name)], { input: JSON.stringify({ cwd: root, ...input }), encoding: "utf8", env: { ...clean, DEVKIT_TEST_CLOCK: "1", DEVKIT_TEST_BASH_MARKERS: join(tmpdir(), "devkit-test-markers"), ...env } });
   return { code: r.status, err: r.stderr };
 }
 const bash = (command, env) => hook("guard-bash.mjs", { tool_name: "Bash", tool_input: { command } }, env);

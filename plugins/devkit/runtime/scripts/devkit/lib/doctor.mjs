@@ -134,7 +134,7 @@ export function diagnose(ctx, config) {
         "problem",
         "計画",
         pa.changedAfterApproval ? "計画（graph.json・仕様書・mission.md）が承認の後に変わっています" : `計画が承認されていません（${pa.pending.join("・")}）`,
-        `人が Claude Code の外の端末で ${(pa.changedAfterApproval ? ["business", "technical"] : pa.pending).map((r) => `pnpm devkit approve plan --role ${r}`).join(" と ")}`,
+        `人が端末（または Claude Code の入力欄の !）で ${(pa.changedAfterApproval ? ["business", "technical"] : pa.pending).map((r) => `pnpm devkit approve plan --role ${r}`).join(" と ")}`,
       );
     const s = loadState(ctx, g);
     const branch = currentBranch(ctx.root);

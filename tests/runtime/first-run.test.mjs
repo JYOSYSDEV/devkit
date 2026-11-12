@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { approvePlan, calls, cleanEnv, defaultScenario, devkit, git, graphFor, implFiles, makeProject, RUNTIME, state } from "./helpers.mjs";
+import { approvePlan, as, calls, cleanEnv, defaultScenario, devkit, git, graphFor, implFiles, makeProject, RUNTIME, state } from "./helpers.mjs";
 
 const HOOKS = join(RUNTIME, ".claude", "hooks");
 const LIB = join(RUNTIME, "scripts", "devkit", "lib");
@@ -47,7 +47,7 @@ function workdir() {
 
 function guard(name, root, tool_input, env = {}) {
   const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DEVKIT_")));
-  const r = spawnSync(process.execPath, [join(HOOKS, name)], { input: JSON.stringify({ cwd: root, tool_input }), encoding: "utf8", env: { ...clean, ...env } });
+  const r = spawnSync(process.execPath, [join(HOOKS, name)], { input: JSON.stringify({ cwd: root, tool_input }), encoding: "utf8", env: { ...clean, DEVKIT_TEST_CLOCK: "1", DEVKIT_TEST_BASH_MARKERS: `${root}-markers`, ...env } });
   return { code: r.status, err: r.stderr };
 }
 
@@ -300,3 +300,77 @@ test("devkit が書く docs/exceptions.json は、Biome の整形に合う形（
   assert.match(biomeJson({ rules: long }), /"rules": \[\n    "TECH-0",\n/);
   assert.deepEqual(JSON.parse(biomeJson({ rules: long })).rules, long);
 });
+
+// ---------- 人のコマンド: 親のプロセスの誤検知と、Claude Code の入力欄の ! ----------
+
+test("メモに Claude と書いただけでは、Claude Code の中からの実行とみなさない", async () => {
+  const { isClaudeProcess } = await import(join(LIB, "human.mjs"));
+  // 報告の例: pnpm が起動した sh の引数に、--note の文章（Claude の利用上限…）が入っている
+  assert.equal(isClaudeProcess({ comm: "sh", argv: ["sh", "-c", "node scripts/devkit/devkit.mjs proposal reject replan-M2-1 --role technical --note '原因は Claude の利用上限（5-hour limit）。計画のまま やり直す'"] }), false);
+  assert.equal(isClaudeProcess({ comm: "node", argv: ["node", "scripts/devkit/devkit.mjs", "answer", "N1", "--note", "claude に任せる"] }), false);
+  assert.equal(isClaudeProcess({ comm: "bash", argv: ["-bash"] }), false);
+  // Claude Code のプロセス
+  assert.equal(isClaudeProcess({ comm: "claude", argv: ["claude"] }), true);
+  assert.equal(isClaudeProcess({ comm: "2.1.322", argv: ["/home/u/.local/bin/claude", "--resume"] }), true);
+  assert.equal(isClaudeProcess({ comm: "2.1.322", argv: ["/home/u/.local/share/claude/versions/2.1.322"] }), true);
+  assert.equal(isClaudeProcess({ comm: "node", argv: ["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"] }), true);
+  assert.equal(isClaudeProcess({ comm: "node", argv: ["/usr/bin/node", "--max-old-space-size=4096", "/usr/local/bin/claude"] }), true);
+  // 実際のプロセス: メモに Claude と書いた人のコマンドが、sh -c の下で動いても断られない
+  const { dir, scenarioFile } = makeProject();
+  git(dir, "config", "user.name", "alice");
+  const cmd = `"${process.execPath}" "${join(dir, "scripts", "devkit", "devkit.mjs")}" approve plan --role 業務 --note '原因は Claude の利用上限'`;
+  const r = spawnSync("sh", ["-c", `${cmd}; exit $?`], { cwd: dir, encoding: "utf8", env: { ...cleanEnv(), DEVKIT_FAKE_SCENARIO: scenarioFile, DEVKIT_HUMAN_TTYLESS: "1" } });
+  // （このテスト自体を Claude Code の中で動かすと、本物の claude が親にいる。sh を Claude と取り違えないことを確かめる）
+  assert.doesNotMatch(r.stdout + r.stderr, /親のプロセス sh/, r.stdout + r.stderr);
+});
+
+test("人のコマンドは Claude Code の入力欄の ! から実行できる。Claude の Bash の実行中は断る", () => {
+  const { dir, scenarioFile } = makeProject();
+  as(dir, "alice");
+  const markers = `${dir}-markers`;
+  const inClaude = { CLAUDECODE: "1", DEVKIT_TEST_BASH_MARKERS: markers };
+  const approve = () => devkit(dir, ["approve", "plan", "--role", "業務"], { scenarioFile, env: inClaude });
+  const hook = (name, input) => spawnSync(process.execPath, [join(dir, ".claude", "hooks", name)], { input: JSON.stringify({ cwd: dir, session_id: "s1", ...input }), encoding: "utf8", env: { ...cleanEnv(), DEVKIT_TEST_CLOCK: "1", DEVKIT_TEST_BASH_MARKERS: markers } });
+  require_fs().cpSync(join(RUNTIME, ".claude"), join(dir, ".claude"), { recursive: true });
+  git(dir, "add", "-A");
+  git(dir, "commit", "-qm", "claude の設定");
+  const settings = join(dir, ".claude", "settings.json");
+  const original = readFileSync(settings, "utf8");
+  // ガードが登録されていない案件・フックを無効にした案件では、! を受け付けない（Claude の Bash と見分けられない）
+  writeFileSync(settings, "{}\n");
+  let r = approve();
+  assert.equal(r.code, 5, r.out);
+  assert.match(r.out, /Claude Code の中/);
+  assert.match(r.out, /guard-bash/);
+  writeFileSync(settings, JSON.stringify({ ...JSON.parse(original), disableAllHooks: true }));
+  assert.equal(approve().code, 5);
+  writeFileSync(settings, original);
+  // Claude が Bash のコマンドを実行中（ガードが目印を残す）: 断る
+  assert.equal(hook("guard-bash.mjs", { tool_use_id: "t1", tool_input: { command: "pnpm verify" } }).status, 0);
+  r = approve();
+  assert.equal(r.code, 5, r.out);
+  assert.match(r.out, /実行中/);
+  // コマンドが終わった（bash-done が目印を消す）: ! からの実行として受け付ける。端末でなくてよく、番号の確認もない
+  hook("bash-done.mjs", { tool_use_id: "t1", tool_input: { command: "pnpm verify" } });
+  // バックグラウンドのコマンドは、終わりの通知では消さない
+  hook("guard-bash.mjs", { tool_use_id: "t2", tool_input: { command: "pnpm dev", run_in_background: true } });
+  hook("bash-done.mjs", { tool_use_id: "t2", tool_input: { command: "pnpm dev", run_in_background: true } });
+  r = approve();
+  assert.equal(r.code, 5, r.out);
+  assert.match(r.out, /バックグラウンド/);
+  // 期限の切れた目印は無効
+  for (const f of require_fs().readdirSync(markers)) writeFileSync(join(markers, f), JSON.stringify({ until: Date.now() - 1, background: true }));
+  r = approve();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /入力欄（!）からの実行として受け付けます/);
+  // Claude の Bash からは、これまでどおりガードが実行の前に止める。目印の場所も書き換えさせない
+  assert.equal(hook("guard-bash.mjs", { tool_use_id: "t3", tool_input: { command: "pnpm devkit approve plan --role 技術" } }).status, 2);
+  for (const c of [`rm -rf ${markers}`, `rm ${markers}/s1.t1.json`, `rm -rf ${dirname(markers)}`, `echo x > ${markers}/a.json`, `find ${markers} -delete`, `node -e 'fs.rmSync("claude-bash")'`]) assert.equal(hook("guard-bash.mjs", { tool_use_id: "t4", tool_input: { command: c } }).status, 2, c);
+  // ランナーが起動した AI は、どの場合も断る
+  r = devkit(dir, ["approve", "plan", "--role", "技術"], { scenarioFile, env: { ...inClaude, DEVKIT_ROLE: "implementer" } });
+  assert.notEqual(r.code, 0);
+});
+
+function require_fs() {
+  return process.getBuiltinModule("node:fs");
+}

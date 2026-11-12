@@ -2,29 +2,46 @@
 //
 // 確かめること（どれか1つでも当てはまれば断る）:
 //   - ランナーが起動した AI か（DEVKIT_RUNNER / DEVKIT_ROLE）
-//   - Claude Code の中から実行されたか（CLAUDECODE などの環境変数、親のプロセスに claude がいる）
+//   - Claude Code の中から実行されたか（CLAUDECODE などの環境変数、親のプロセスに claude がいる）。
+//     中からの実行は、入力欄の ! からのものだけを受け付ける（Claude の Bash が実行中でないこと。bangProblem）
 //   - 端末から実行されたか（標準入力が端末。Windows の Git Bash などでは DEVKIT_HUMAN_TTYLESS=1）
 //   - 画面に出した確認の番号を、人が打ち込んだか
 // 同じ利用者の権限で動くプログラムを完全に見分けることはできない。承認の記録は、CODEOWNERS とブランチ保護で
 // 人のレビューを通すことと組み合わせて使う（docs/rollout.md の 7）。
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync, readSync, writeSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, writeSync } from "node:fs";
+import { join } from "node:path";
 import { userInfo } from "node:os";
-import { ROLE_LABEL, ROLE_PERSON } from "../shared.mjs";
+import { bashMarkerDir, findRepoRoot, ROLE_LABEL, ROLE_PERSON } from "../shared.mjs";
 import { commitArgs, git } from "./git.mjs";
 import { journalWrite } from "./seal.mjs";
 import { fail, localTime, nowIso, readJson, readText } from "./util.mjs";
 
 const CLAUDE_ENV = ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT", "CLAUDE_AGENT_SDK_VERSION", "CLAUDE_CODE_SESSION_ID"];
 
-// 親をたどって、Claude Code のプロセスがいないか（Linux は /proc、macOS などは ps）
+// 親をたどって、Claude Code のプロセスがいないか（Linux は /proc、macOS などは ps）。
+// 見るのは実行ファイル（と、node などで動かしているスクリプト）だけ。引数の文章は見ない
+// （--note "原因は Claude の利用上限…" のように、メモに Claude と書いただけで断らないように）
+const CLAUDE_BIN = /(^|[\\/])claude(\.exe)?$/i;
+const CLAUDE_PATH = /@anthropic-ai[\\/]claude-code|claude-code[\\/]cli\.js|[\\/]claude[\\/]versions[\\/]/i;
+const RUNTIMES = /(^|[\\/])(node|nodejs|bun|deno)(\.exe)?$/i;
+
+export function isClaudeProcess({ comm = "", argv = [] } = {}) {
+  const exe = String(argv[0] ?? "");
+  if (CLAUDE_BIN.test(String(comm).trim()) || CLAUDE_BIN.test(exe) || CLAUDE_PATH.test(exe)) return true;
+  if (RUNTIMES.test(exe) || RUNTIMES.test(String(comm).trim())) {
+    const script = argv.slice(1).find((x) => !String(x).startsWith("-"));
+    if (script && (CLAUDE_BIN.test(script) || CLAUDE_PATH.test(script))) return true;
+  }
+  return false;
+}
+
 export function claudeAncestor(startPid = process.ppid) {
   let pid = startPid;
   for (let i = 0; i < 64 && pid > 1; i++) {
     const info = procInfo(pid);
     if (!info) return null;
-    const text = `${info.comm} ${info.args}`;
-    if (/(^|[\s/\\])claude(\.exe)?(\s|$)/i.test(text) || /@anthropic-ai[\\/]claude-code|claude-code[\\/]cli\.js/i.test(text)) return `${info.comm}（pid ${pid}）`;
+    if (isClaudeProcess(info)) return `${info.comm}（pid ${pid}）`;
     pid = info.ppid;
   }
   return null;
@@ -36,11 +53,11 @@ function procInfo(pid) {
       const status = readFileSync(`/proc/${pid}/status`, "utf8");
       const ppid = Number(status.match(/^PPid:\s*(\d+)/m)?.[1] ?? 0);
       const comm = status.match(/^Name:\s*(.+)$/m)?.[1]?.trim() ?? "";
-      let args = "";
+      let argv = [];
       try {
-        args = readFileSync(`/proc/${pid}/cmdline`, "utf8").replaceAll("\0", " ").trim();
+        argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
       } catch {}
-      return { ppid, comm, args };
+      return { ppid, comm, argv };
     } catch {
       return null;
     }
@@ -49,8 +66,49 @@ function procInfo(pid) {
   const r = spawnSync("ps", ["-o", "ppid=", "-o", "comm=", "-p", String(pid)], { encoding: "utf8" });
   const m = (r.stdout ?? "").trim().match(/^(\d+)\s+(.*)$/);
   if (!m) return null;
+  // ps は引数を空白でつなげて返す。実行ファイルと、その次の語（node で動かしているスクリプト）までを見る
   const a = spawnSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8" });
-  return { ppid: Number(m[1]), comm: m[2], args: (a.stdout ?? "").trim() };
+  return { ppid: Number(m[1]), comm: m[2], argv: (a.stdout ?? "").trim().split(/\s+/).slice(0, 3) };
+}
+
+// Claude Code の入力欄の ! からの実行として受け付けられない理由（受け付けられるなら null）。
+// ! で実行したコマンドも Claude Code の子プロセスなので、環境変数と親のプロセスでは Claude の Bash と見分けられない。
+// 見分けるのは、Claude の Bash の前に必ず動くフック（guard-bash）が残す「実行中」の目印:
+//   - 案件の .claude/settings.json に guard-bash が登録されていて、フックが無効にされていない
+//   - いま実行中の Claude の Bash がない（目印がない）
+// 人のコマンドそのものを Claude が Bash で実行しようとした場合は、guard-bash が実行の前に止める
+export function bangProblem(root = process.env.DEVKIT_ROOT || findRepoRoot(process.cwd())?.root || process.cwd()) {
+  const read = (p) => {
+    try {
+      return JSON.parse(readFileSync(p, "utf8"));
+    } catch {
+      return null;
+    }
+  };
+  let home = "";
+  try {
+    home = userInfo().homedir;
+  } catch {}
+  const project = read(join(root, ".claude", "settings.json"));
+  const registered = (project?.hooks?.PreToolUse ?? []).some(
+    (e) => /(^|\|)Bash(\||$)/.test(String(e?.matcher ?? "")) && (e?.hooks ?? []).some((h) => /guard-bash\.mjs/.test(`${h?.command ?? ""} ${(h?.args ?? []).join(" ")}`)),
+  );
+  if (!registered) return "案件の .claude/settings.json に devkit のガード（guard-bash）が登録されていません";
+  const off = [join(root, ".claude", "settings.json"), join(root, ".claude", "settings.local.json"), home ? join(home, ".claude", "settings.json") : null].filter(Boolean).find((f) => read(f)?.disableAllHooks === true);
+  if (off) return `フックが無効にされています（${off} の disableAllHooks）`;
+  const dir = bashMarkerDir();
+  const now = Date.now();
+  let live = [];
+  try {
+    live = readdirSync(dir)
+      .map((f) => read(join(dir, f)))
+      .filter((m) => m && Number(m.until) > now);
+  } catch {}
+  if (live.length) {
+    const wait = Math.ceil((Math.max(...live.map((m) => Number(m.until))) - now) / 1000);
+    return `Claude が Bash のコマンドを実行中です（${live.some((m) => m.background) ? "バックグラウンドのコマンドを含む。" : ""}長くてあと約 ${wait} 秒）。Claude の手が止まってから、もう一度 ! で実行してください`;
+  }
+  return null;
 }
 
 export function claudeMarkers() {
@@ -105,11 +163,17 @@ export function requireHuman(what, { detail = "" } = {}) {
   if (process.env.DEVKIT_RUNNER === "1" || process.env.DEVKIT_ROLE)
     fail(`${what} は人が端末で実行するコマンドです。ランナーが起動した AI からは実行できません。`, 5);
   const claude = claudeMarkers();
-  if (claude)
-    fail(
-      `${what} は人が端末で実行するコマンドです。Claude Code の中からは実行できません（${claude}。入力欄の ! で実行しても同じです）。Claude Code を動かしているのとは別の端末で \`pnpm devkit ${what}\` を実行してください。`,
-      5,
-    );
+  if (claude) {
+    // Claude Code の中: 入力欄の ! からの実行だけを受け付ける（Claude の Bash からの実行は断る）。番号の確認はしない（! では打ち込めない）
+    const why = bangProblem();
+    if (why)
+      fail(
+        `${what} は人が実行するコマンドです。Claude Code の中から実行されましたが（${claude}）、入力欄の ! からの実行と確かめられませんでした: ${why}。Claude からは実行できません。Claude Code の入力欄で \`! pnpm devkit ${what}\` と打つか、別の端末で実行してください。`,
+        5,
+      );
+    process.stderr.write(`[devkit] Claude Code の入力欄（!）からの実行として受け付けます: ${what}\n`);
+    return;
+  }
   if (!process.stdin.isTTY && process.env.DEVKIT_HUMAN_TTYLESS !== "1")
     fail(`${what} は人が端末で実行するコマンドです。Claude からは実行しません。利用者に、端末で \`pnpm devkit ${what}\` を実行するよう伝えてください。`, 5);
   confirmTyped(`pnpm devkit ${what}`, detail);

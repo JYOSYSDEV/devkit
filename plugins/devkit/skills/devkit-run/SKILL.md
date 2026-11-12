@@ -48,7 +48,7 @@ pnpm devkit briefing --print     # 今朝のブリーフィングを表示（--p
 - Supervisor が止まった（`limit_stop`・`env_stop`・`policy_stop`・`manual_stop`）ときの解除は、原因を直してから標準オーナーが端末で `pnpm devkit supervisor clear --role 技術 --note "…"`（Claude からは実行できない）。
 - Supervisor は API の課金に切り替わる設定（`ANTHROPIC_API_KEY` など）をランナーに渡さない（`.devkit/config.json` の `supervisor.allowApiKey` を人が変えた場合を除く）。
 
-ランナーが起動する AI の権限は `.devkit/config.json` の `permissionMode`（既定 `dontAsk`: 許可していない操作は確認を待たずに拒否する）で決まります。ランナーは、Docker か Podman（検証の隔離。`isolation`）と、Linux では bubblewrap と socat（AI のサンドボックス。`aiSandbox`）がないと起動しません。足りないと言われたら、管理者の手順（docs/rollout.md の「隔離」）を案内します。ランナーを起動する前と、起動時に止まったときは、`pnpm -s devkit doctor` を実行して、直すこと（コンテナのエンジン・サンドボックス・AI の担当・未コミットの変更・記録の照合・人が編集するファイルの形）をまとめて利用者に伝えます（1つずつ直して起動し直す、を繰り返させない）。承認・`seal accept` などの人のコマンドは、Claude Code を動かしているのとは別の端末で実行してもらいます（入力欄の `!` からも実行できません）。`.devkit/config.json` は人が手で変えるファイルで、Claude は編集しません。
+ランナーが起動する AI の権限は `.devkit/config.json` の `permissionMode`（既定 `dontAsk`: 許可していない操作は確認を待たずに拒否する）で決まります。ランナーは、Docker か Podman（検証の隔離。`isolation`）と、Linux では bubblewrap と socat（AI のサンドボックス。`aiSandbox`）がないと起動しません。足りないと言われたら、管理者の手順（docs/rollout.md の「隔離」）を案内します。ランナーを起動する前と、起動時に止まったときは、`pnpm -s devkit doctor` を実行して、直すこと（コンテナのエンジン・サンドボックス・AI の担当・未コミットの変更・記録の照合・人が編集するファイルの形）をまとめて利用者に伝えます（1つずつ直して起動し直す、を繰り返させない）。承認・`seal accept` などの人のコマンドは、利用者に、端末か Claude Code の入力欄の `!`（例 `! pnpm devkit approve plan --role 技術`）で実行してもらいます（Claude 自身は実行しません。`!` は、Claude が Bash のコマンドを実行していないときだけ受け付けられます）。`.devkit/config.json` は人が手で変えるファイルで、Claude は編集しません。
 
 ## 止めるとき
 

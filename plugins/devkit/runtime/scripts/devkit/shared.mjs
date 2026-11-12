@@ -1,6 +1,26 @@
 // devkit.mjs・ランナー・フック（.claude/hooks/*.mjs）が共有する定義。依存パッケージなし。
 import { existsSync, statSync } from "node:fs";
+import { homedir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
+
+// Claude の Bash ツールが実行中であることの目印の置き場所（guard-bash が書き、bash-done が消し、人のコマンドが読む）。
+// 人のコマンドを Claude Code の入力欄の ! から受け付けるとき、Claude 自身の Bash からの実行と見分けるのに使う。
+// 場所は環境変数（HOME・XDG_CACHE_HOME）では変えられない（Claude のコマンドから別の場所を見せられないように）
+export function bashMarkerDir() {
+  if (process.env.DEVKIT_TEST_CLOCK === "1" && process.env.DEVKIT_TEST_BASH_MARKERS) return resolve(process.env.DEVKIT_TEST_BASH_MARKERS);
+  let home;
+  try {
+    home = userInfo().homedir;
+  } catch {
+    home = homedir();
+  }
+  return join(home, ".cache", "devkit", "claude-bash");
+}
+
+export function bashMarkerName(sessionId, toolUseId) {
+  const clean = (v) => String(v ?? "").replace(/[^A-Za-z0-9_-]+/g, "").slice(0, 80) || "x";
+  return `${clean(sessionId)}.${clean(toolUseId)}.json`;
+}
 
 // ノードの owns にできず、並列ワーカーが変更してはいけない共有ファイル。
 // 一覧は `pnpm -s devkit shared` で表示できる。文書にはこの一覧を写さず、コマンドを案内する。

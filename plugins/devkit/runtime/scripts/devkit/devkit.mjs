@@ -717,7 +717,7 @@ const commands = {
     if (opts.json) out(JSON.stringify({ ok: bad.length === 0, items }, null, 2));
     else {
       out(`起動前の検査（${ctx.root}）\n${doctorText(items)}`);
-      out(bad.length ? `\n直すことが ${bad.length} 件あります。承認・seal accept などの人のコマンドは、Claude Code の外の端末で実行します（入力欄の ! からも実行できません）` : "\n直すことはありません。ランナーは pnpm devkit run");
+      out(bad.length ? `\n直すことが ${bad.length} 件あります。承認・seal accept などの人のコマンドは、人が端末か、Claude Code の入力欄の ! で実行します（Claude からは実行できません）` : "\n直すことはありません。ランナーは pnpm devkit run");
     }
     if (bad.length) process.exitCode = 1;
   },

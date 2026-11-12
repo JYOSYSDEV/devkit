@@ -258,7 +258,7 @@ devkit の人のコマンド（approve など）は、Claude Code の中から�
 | Supervisor が `limit_stop`・`env_stop`・`policy_stop` | `pnpm devkit supervisor status` で理由を見る。原因（上限・ログイン切れ・環境・記録の不整合）を直してから、標準オーナーが端末で `pnpm devkit supervisor clear --role 技術 --note "<直したこと>"` |
 | Supervisor が判断の後に再開しない | `pnpm devkit supervisor status` の「次の照合での判断」を見る（一時停止中・時間帯の外・再試行の待ち・計画の承認待ち・作業がない、など）。手動停止（`manual_stop`）なら解除が要る |
 | ブリーフィングが届かない | `pnpm devkit supervisor status` の配信の状況。`no_target` は送り先の環境変数がない（`DEVKIT_NOTIFY_CMD`）。`failed` でも `.devkit/briefings/` に保存されている |
-| `Claude Code の中からは実行できません` | 人のコマンドは、Claude Code を動かしているのとは別の端末で実行する（Claude Code の入力欄の `!` や、Claude Code から開いた端末も断る） |
+| `Claude Code の中から実行されましたが…入力欄の ! からの実行と確かめられませんでした` | 人のコマンドは、端末か、Claude Code の入力欄の `!`（例 `! pnpm devkit approve plan --role 技術`）で実行する。Claude 自身の Bash からは実行できない。`!` で断られるのは、Claude が Bash のコマンドを実行中のとき（手が止まってからもう一度。バックグラウンドのコマンドがあると最長 10 分）、案件の `.claude/settings.json` に devkit のガードが登録されていないとき、フックが無効のとき。そのときは別の端末で実行する |
 | `開始時点のコードで検証が通りません` | 統合ブランチで `pnpm verify` を手で実行して直す（雛形・環境・ブラウザ） |
 | `別のランナーが実行中です` | 二重起動の防止。落ちたランナーのロックは、プロセスがなく、ハートビートが途絶えていれば次の起動で外れる |
 | 同じ作業が何度も不合格 | `pnpm devkit logs` と `.devkit/state.json` の history を見る。goal があいまいなら計画を直して承認し直す。`devkit-diagnose` で調べる |
